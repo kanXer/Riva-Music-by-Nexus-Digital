@@ -22,9 +22,11 @@ import okhttp3.RequestBody.Companion.toRequestBody
 /**
  * Small InnerTube client modelled after the requests used by Musify.
  *
- * Search uses the public WEB client. Playback intentionally prefers the
- * ANDROID client because, at the time of writing, it is the client that still
- * returns a directly playable muxed MP4 URL (itag 18) without a PO token.
+ * Search uses the public WEB client. Playback prefers the VISIONOS client —
+ * Aug 2026 ke baad ANDROID/IOS/ANDROID_VR clients flagged IPs par PO token
+ * maangte hain ("Sign in to confirm you're not a bot"), VISIONOS still exempt.
+ * visitorData locally mint hota hai aur X-Goog-Visitor-Id + context me jata hai.
+ * VR/IOS/ANDROID ab fallback hain.
  */
 class InnerTubeClient(
     private val http: OkHttpClient = NetworkModule.getOkHttpClient(),
@@ -260,16 +262,62 @@ class InnerTubeClient(
 
     private fun firstDescriptionDesc(shelf: JsonObject): JsonObject? = shelf["description"].asObjectOrNull()
 
-    suspend fun resolveAudio(videoId: String): StreamResolution = withContext(Dispatchers.IO) {
+    /**
+     * Normal resolve: 4 clients × 2 passes, aur poora fail hone par Musify wala
+     * last-resort — free proxy pool se resolve (setting OFF par bhi chalta hai).
+     */
+    suspend fun resolveAudio(videoId: String): StreamResolution {
+        // NOTE: suspend fun, isliye body resolveAudioInternal me hi chalega
+        return resolveAudioInternal(videoId, null, allowProxyFallback = true)
+    }
+
+    /** Proxy client ke saath resolve — YouTubeProxyManager ka validation path. */
+    suspend fun resolveAudio(videoId: String, proxyClient: OkHttpClient): StreamResolution {
+        return resolveAudioInternal(videoId, proxyClient, allowProxyFallback = false)
+    }
+
+    private suspend fun resolveAudioInternal(
+        videoId: String,
+        proxyClient: OkHttpClient?,
+        allowProxyFallback: Boolean,
+    ): StreamResolution = withContext(Dispatchers.IO) {
         val errors = mutableListOf<String>()
 
-        for (client in playbackClients) {
-            try {
-                val resolution = requestPlayer(videoId, client)
-                if (resolution != null) return@withContext resolution
-            } catch (t: Throwable) {
-                errors += "${client.name}: ${t.message ?: t.javaClass.simpleName}"
+        // Genuine browser session (visitorData + cookies) — iske bina flagged IPs
+        // par official music par "Sign in to confirm you're not a bot" aata hai.
+        var sessionVd = YouTubeSession.ensurePrimed(videoId)
+
+        for (pass in 0 until 2) {
+            val errorsBefore = errors.size
+            for (client in playbackClients) {
+                try {
+                    val resolution = requestPlayer(videoId, client, sessionVd, proxyClient)
+                    if (resolution != null) return@withContext resolution
+                } catch (t: Throwable) {
+                    if (t is kotlinx.coroutines.CancellationException) throw t
+                    errors += "${client.name}: ${t.message ?: t.javaClass.simpleName}"
+                }
             }
+
+            val botBlocked = errors.drop(errorsBefore).any { message ->
+                message.contains("confirm you", ignoreCase = true) ||
+                    message.contains("not a bot", ignoreCase = true)
+            }
+            if (pass == 0 && botBlocked) {
+                // Session purani/ghair-authentic ho gayi — fresh prime karke ek aur round.
+                sessionVd = YouTubeSession.refresh(videoId)
+                    ?: YouTubeSession.currentVisitorData()
+                    ?: sessionVd
+                continue
+            }
+            break
+        }
+
+        // Musify ka defence layer #4: direct fail → free proxy pool se try.
+        // resolveAudioInternal(videoId, proxyClient) se loop guard ke liye allowProxyFallback=false.
+        if (allowProxyFallback && proxyClient == null) {
+            val viaProxy = proxyManager.resolveViaProxy(videoId)
+            if (viaProxy != null) return@withContext viaProxy
         }
 
         throw IOException(
@@ -280,25 +328,43 @@ class InnerTubeClient(
         )
     }
 
-    private fun requestPlayer(videoId: String, client: PlaybackClient): StreamResolution? {
+    private val proxyManager: YouTubeProxyManager by lazy { YouTubeProxyManager(this, http) }
+
+    private fun requestPlayer(
+        videoId: String,
+        client: PlaybackClient,
+        sessionVd: String?,
+        proxyClient: OkHttpClient? = null,
+    ): StreamResolution? {
+        val vd = if (client.needsVisitorData) sessionVd ?: visitorData() else null
+        val context = if (vd != null) withVisitorData(client.context, vd) else client.context
         val body = buildJsonObject {
-            put("context", client.context)
+            put("context", context)
             put("videoId", JsonPrimitive(videoId))
             put("contentCheckOk", JsonPrimitive(true))
             put("racyCheckOk", JsonPrimitive(true))
         }
 
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url(client.url)
             .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
             .header("Content-Type", "application/json")
             .header("User-Agent", client.userAgent)
             .header("Origin", "https://www.youtube.com")
-            .header("X-Youtube-Client-Name", client.name)
+            .header("X-Youtube-Client-Name", client.numericName)
             .header("X-Youtube-Client-Version", client.version)
-            .build()
+        if (vd != null) {
+            requestBuilder.header("X-Goog-Visitor-Id", vd)
+        }
+        val request = requestBuilder.build()
 
-        val root = json.parseToJsonElement(execute(request)).asObjectOrNull() ?: return null
+        val rawResponse = if (proxyClient != null) executeWith(proxyClient, request) else newExecute(request)
+        NetworkModule.logNet(
+            "player",
+            "client=${client.name} vd=${vd?.take(12)} resp=${rawResponse.take(700)}",
+        )
+
+        val root = json.parseToJsonElement(rawResponse).asObjectOrNull() ?: return null
         val status = root["playabilityStatus"].asObjectOrNull()
         val playability = status?.get("status")?.asStringOrNull()
         if (playability != null && playability != "OK") {
@@ -447,6 +513,18 @@ class InnerTubeClient(
         )
     }
 
+    /** execute ka variant jo raw body text deta hai (logging ke liye response text reuse hota hai). */
+    private fun newExecute(request: Request): String = execute(request)
+
+    /** Proxy client ke saath raw execute (YouTubeProxyManager validation path). */
+    private fun executeWith(client: OkHttpClient, request: Request): String {
+        client.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IOException("HTTP ${response.code}: ${body.take(180)}")
+            return body
+        }
+    }
+
     private fun execute(request: Request): String {
         http.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
@@ -470,10 +548,12 @@ class InnerTubeClient(
 
     private data class PlaybackClient(
         val name: String,
+        val numericName: String,
         val version: String,
         val userAgent: String,
         val url: String,
         val context: JsonObject,
+        val needsVisitorData: Boolean = false,
     )
 
     companion object {
@@ -486,6 +566,13 @@ class InnerTubeClient(
         private const val ANDROID_VERSION = "21.26.364"
         private const val ANDROID_UA =
             "com.google.android.youtube/$ANDROID_VERSION (Linux; U; Android 11) gzip"
+        private const val VR_VERSION = "1.61.29"
+        private const val VR_UA =
+            "com.google.android.apps.youtube.vr.oculus/$VR_VERSION " +
+                "(Linux; U; Android 7.1.1; eureka-user Build/N2G512) gzip"
+        private const val VISIONOS_UA =
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 " +
+                "(KHTML, like Gecko) Version/26.0 Safari/605.1.15"
         private const val WEB_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
@@ -548,22 +635,126 @@ class InnerTubeClient(
             })
         }
 
+        private val vrContext: JsonObject = buildJsonObject {
+            put("client", buildJsonObject {
+                put("clientName", JsonPrimitive("ANDROID_VR"))
+                put("clientVersion", JsonPrimitive(VR_VERSION))
+                put("userAgent", JsonPrimitive(VR_UA))
+                put("osName", JsonPrimitive("Android"))
+                put("osVersion", JsonPrimitive("7.1.1"))
+                put("hl", JsonPrimitive("en"))
+                put("timeZone", JsonPrimitive("UTC"))
+                put("utcOffsetMinutes", JsonPrimitive(0))
+            })
+        }
+
+        private val visionosContext: JsonObject = buildJsonObject {
+            put("client", buildJsonObject {
+                put("clientName", JsonPrimitive("VISIONOS"))
+                put("clientVersion", JsonPrimitive("1.02"))
+                put("deviceMake", JsonPrimitive("Apple"))
+                put("deviceModel", JsonPrimitive("RealityDevice17,1"))
+                put("platform", JsonPrimitive("MOBILE"))
+                put("osName", JsonPrimitive("visionOS"))
+                put("osVersion", JsonPrimitive("26.5.23O471"))
+                put("userAgent", JsonPrimitive(VISIONOS_UA))
+                put("hl", JsonPrimitive("en"))
+                put("timeZone", JsonPrimitive("UTC"))
+                put("utcOffsetMinutes", JsonPrimitive(0))
+            })
+        }
+
         private val playbackClients = listOf(
+            // VISIONOS: token-mukat client (Aug 2026 se ANDROID_VR/IOS par PO token
+            // chahiye hota hai on flagged IPs, VISIONOS exempt) — mukhya client.
+            PlaybackClient(
+                name = "VISIONOS",
+                numericName = "101",
+                version = "1.02",
+                userAgent = VISIONOS_UA,
+                url = "$YOUTUBE_BASE/youtubei/v1/player?prettyPrint=false",
+                context = visionosContext,
+                needsVisitorData = true,
+            ),
+            PlaybackClient(
+                name = "ANDROID_VR",
+                numericName = "28",
+                version = VR_VERSION,
+                userAgent = VR_UA,
+                url = "$YOUTUBE_BASE/youtubei/v1/player?prettyPrint=false",
+                context = vrContext,
+                needsVisitorData = true,
+            ),
+            PlaybackClient(
+                name = "IOS",
+                numericName = "5",
+                version = "21.26.4",
+                userAgent = "com.google.ios.youtube/21.26.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)",
+                url = "$YOUTUBE_BASE/youtubei/v1/player?key=$IOS_KEY&prettyPrint=false",
+                context = iosContext,
+                needsVisitorData = true,
+            ),
             PlaybackClient(
                 name = "ANDROID",
+                numericName = "3",
                 version = ANDROID_VERSION,
                 userAgent = ANDROID_UA,
                 url = "$YOUTUBE_BASE/youtubei/v1/player?prettyPrint=false",
                 context = androidContext,
             ),
-            PlaybackClient(
-                name = "IOS",
-                version = "21.26.4",
-                userAgent = "com.google.ios.youtube/21.26.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)",
-                url = "$YOUTUBE_BASE/youtubei/v1/player?key=$IOS_KEY&prettyPrint=false",
-                context = iosContext,
-            ),
         )
+
+        /**
+         * Anonymous visitorData jo visitor protobuf {id(1): string, ts(5): int32} se
+         * locally mint hota hai — har app session me ek. Bot-check layer ke liye
+         * client context + X-Goog-Visitor-Id me jata hai.
+         */
+        @Volatile
+        private var cachedVisitorData: String? = null
+
+        fun visitorData(): String {
+            cachedVisitorData?.let { return it }
+            synchronized(this) {
+                cachedVisitorData?.let { return it }
+                val allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+                val rnd = java.security.SecureRandom()
+                val id = StringBuilder(24).also { sb ->
+                    repeat(24) { sb.append(allowed[rnd.nextInt(allowed.length)]) }
+                }.toString()
+                val out = java.io.ByteArrayOutputStream()
+                out.write(0x0A)
+                out.write(id.toByteArray(Charsets.UTF_8))
+                out.write(0x28)
+                var ts = (System.currentTimeMillis() / 1000L) and 0xFFFFFFFFL
+                while (true) {
+                    val byte = (ts and 0x7FL).toInt()
+                    ts = ts ushr 7
+                    out.write(if (ts != 0L) byte or 0x80 else byte)
+                    if (ts == 0L) break
+                }
+                val vd = java.util.Base64.getEncoder()
+                    .withoutPadding()
+                    .encodeToString(out.toByteArray())
+                cachedVisitorData = vd
+                return vd
+            }
+        }
+
+        /** context.client ke andar visitorData inject karta hai (bina other fields chhue). */
+        private fun withVisitorData(context: JsonObject, vd: String): JsonObject = buildJsonObject {
+            val clientObj = context["client"].asObjectOrNull()
+            if (clientObj != null) {
+                // existing client object + visitorData
+                put("client", buildJsonObject {
+                    clientObj.forEach { (key, value) -> put(key, value) }
+                    put("visitorData", JsonPrimitive(vd))
+                })
+            } else {
+                put("client", buildJsonObject {
+                    put("visitorData", JsonPrimitive(vd))
+                })
+            }
+        }
 
         private fun defaultHttpClient(): OkHttpClient = NetworkModule.getOkHttpClient()
     }

@@ -7,12 +7,15 @@ import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import coil.request.CachePolicy
 import com.nexusdigital.rivamusic.data.NetworkModule
+import java.io.File
 
 class RivaApplication : Application(), ImageLoaderFactory {
 
     override fun onCreate() {
         super.onCreate()
         NetworkModule.getOkHttpClient(this)
+        NetworkModule.netDebugFile = File(getExternalFilesDir(null), "debug_net.log")
+        NetworkModule.logNet("init", "app started")
     }
 
     override fun newImageLoader(): ImageLoader {

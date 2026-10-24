@@ -104,6 +104,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
     private var baseQueue: List<Track> = initialRecent
     private var queueIndex = 0
     private var resolveJob: Job? = null
+    private var autoSkips = 0
 
     private val _repeatMode = MutableStateFlow(
         runCatching {
@@ -848,9 +849,28 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
                     downloadsRepo.autoCache(track, resolution)
                 }
                 recentRepo.add(track)
+                autoSkips = 0
             } catch (t: Throwable) {
                 if (t is kotlinx.coroutines.CancellationException) throw t
-                _messages.tryEmit("Could not play: ${t.message}")
+                android.util.Log.e("RivaPlay", "resolve fail ${track.id}: ${t.message}")
+                val message = t.message.orEmpty()
+                val blockedByYouTube = message.contains("confirm you", ignoreCase = true) ||
+                    message.contains("not a bot", ignoreCase = true)
+                if (blockedByYouTube && autoSkips < 5 && queue.value.size > 1) {
+                    // Compilation/blocked video — queue me agla gaana khud chala do.
+                    autoSkips += 1
+                    _messages.tryEmit("Ye video YouTube ne block kiya — agla gaana laga rahe hain")
+                    viewModelScope.launch {
+                        kotlinx.coroutines.delay(300)
+                        playNext()
+                    }
+                } else if (blockedByYouTube) {
+                    _messages.tryEmit(
+                        "YouTube ne ye video is network pe block kiya hai — doosra gaana try karein",
+                    )
+                } else {
+                    _messages.tryEmit("Could not play: ${t.message}")
+                }
             } finally {
                 _isResolving.value = false
             }

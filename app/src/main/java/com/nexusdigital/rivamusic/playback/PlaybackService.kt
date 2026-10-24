@@ -27,6 +27,7 @@ import androidx.media3.session.SessionCommands
 import androidx.media3.session.SessionResult
 import com.google.common.collect.ImmutableList
 import com.nexusdigital.rivamusic.MainActivity
+import com.nexusdigital.rivamusic.R
 
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
@@ -36,21 +37,21 @@ class PlaybackService : MediaSessionService() {
     private val closeButton = CommandButton.Builder()
         .setDisplayName("Close")
         .setSessionCommand(closeCommand)
-        .setIconResId(android.R.drawable.ic_menu_close_clear_cancel)
+        .setCustomIconResId(R.drawable.ic_notif_close)
         .build()
 
     private val nextCommand = SessionCommand(ACTION_NEXT, Bundle.EMPTY)
     private val nextButton = CommandButton.Builder()
         .setDisplayName("Next")
         .setSessionCommand(nextCommand)
-        .setIconResId(android.R.drawable.ic_media_next)
+        .setCustomIconResId(R.drawable.ic_notif_next)
         .build()
 
     private val prevCommand = SessionCommand(ACTION_PREV, Bundle.EMPTY)
     private val prevButton = CommandButton.Builder()
         .setDisplayName("Previous")
         .setSessionCommand(prevCommand)
-        .setIconResId(android.R.drawable.ic_media_previous)
+        .setCustomIconResId(R.drawable.ic_notif_prev)
         .build()
 
     private val sessionCallback = object : MediaSession.Callback {
