@@ -75,6 +75,9 @@ import com.nexusdigital.rivamusic.data.DownloadedTrack
 import com.nexusdigital.rivamusic.data.HomeSection
 import com.nexusdigital.rivamusic.data.Playlist
 import com.nexusdigital.rivamusic.data.Track
+import com.nexusdigital.rivamusic.data.UserProfile
+import coil.compose.AsyncImage
+import androidx.compose.ui.layout.ContentScale
 import com.nexusdigital.rivamusic.theme.*
 import java.time.LocalTime
 
@@ -88,6 +91,8 @@ fun HomeScreen(
     downloadedIds: Set<String>,
     selectedRegion: MusicRegion = AVAILABLE_REGIONS.first(),
     selectedLanguages: Set<String> = emptySet(),
+    userProfile: UserProfile? = null,
+    onOpenProfile: () -> Unit = {},
     onOpenLanguages: () -> Unit = {},
     onOpenTrending: () -> Unit = {},
     onPlay: (Track, List<Track>) -> Unit,
@@ -115,6 +120,8 @@ fun HomeScreen(
                 onRefresh = onRefresh,
                 selectedRegion = selectedRegion,
                 selectedLanguages = selectedLanguages,
+                userProfile = userProfile,
+                onOpenProfile = onOpenProfile,
                 onOpenLanguages = onOpenLanguages,
                 onSearchClick = onExplore,
             )
@@ -213,6 +220,8 @@ private fun HomeHeader(
     onRefresh: () -> Unit,
     selectedRegion: MusicRegion,
     selectedLanguages: Set<String>,
+    userProfile: UserProfile? = null,
+    onOpenProfile: () -> Unit = {},
     onOpenLanguages: () -> Unit,
     onSearchClick: () -> Unit,
 ) {
@@ -249,7 +258,7 @@ private fun HomeHeader(
                 }
             }
 
-            // Right Actions: Region Pill, Search Button, Refresh Button
+            // Right Actions: Region Pill, Search Button, Refresh Button, Profile Avatar
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -328,13 +337,45 @@ private fun HomeHeader(
                         )
                     }
                 }
+
+                // Profile Avatar Button
+                if (userProfile != null) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(PanelElevated)
+                            .border(1.dp, if (!userProfile.isGuest) Lime else PanelBorder, CircleShape)
+                            .clickable(onClick = onOpenProfile),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (!userProfile.photoUrl.isNullOrBlank()) {
+                            AsyncImage(
+                                model = userProfile.photoUrl,
+                                contentDescription = "Profile",
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(CircleShape),
+                                contentScale = ContentScale.Crop,
+                            )
+                        } else {
+                            Text(
+                                text = userProfile.displayName.take(1).uppercase(),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Lime,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                }
             }
         }
 
         // Greeting and tagline
         Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)) {
+            val personalGreeting = if (userProfile != null) "$greeting, ${userProfile.displayName}" else greeting
             Text(
-                text = greeting,
+                text = personalGreeting,
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextSecondary,
             )
@@ -512,7 +553,7 @@ private fun HomeSkeleton() {
 }
 
 @Composable
-fun SearchScreen(
+private fun LegacySearchScreen(
     query: String,
     onQueryChange: (String) -> Unit,
     isSearching: Boolean,
@@ -693,7 +734,7 @@ private fun SearchTipCard() {
 }
 
 @Composable
-fun LibraryScreen(
+private fun LegacyLibraryScreen(
     downloads: List<DownloadedTrack>,
     progress: Map<String, DownloadStatus>,
     cachedTracks: List<Track>,

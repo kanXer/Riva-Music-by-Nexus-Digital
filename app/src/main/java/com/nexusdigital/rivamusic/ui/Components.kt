@@ -20,6 +20,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -153,6 +155,8 @@ fun TrackRow(
     onPlay: () -> Unit,
     onDownload: () -> Unit,
     modifier: Modifier = Modifier,
+    isLiked: Boolean = false,
+    onToggleLike: (() -> Unit)? = null,
 ) {
     Row(
         modifier = modifier
@@ -212,6 +216,17 @@ fun TrackRow(
                         color = TextFaint,
                     )
                 }
+            }
+        }
+
+        if (onToggleLike != null) {
+            IconButton(onClick = onToggleLike, modifier = Modifier.size(38.dp)) {
+                Icon(
+                    imageVector = if (isLiked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                    contentDescription = if (isLiked) "Remove from Liked songs" else "Add to Liked songs",
+                    tint = if (isLiked) Coral else TextSecondary,
+                    modifier = Modifier.size(21.dp),
+                )
             }
         }
 

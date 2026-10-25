@@ -18,6 +18,18 @@ class MusicRepository(
         return api.search(clean, limit)
     }
 
+    suspend fun searchMusicTracks(query: String, limit: Int = 30): List<Track> =
+        api.searchMusicTracks(query, limit)
+
+    suspend fun searchMusicItems(query: String, filter: SearchFilter, limit: Int = 30): List<SearchItem> =
+        api.searchMusic(query, filter, limit)
+
+    suspend fun searchSuggestions(query: String): SearchSuggestions =
+        api.searchSuggestions(query)
+
+    suspend fun fetchMusicCollection(browseId: String, title: String): SearchCollection =
+        api.fetchMusicCollection(browseId, title)
+
     suspend fun fetchPlaylist(urlOrId: String): Pair<String, List<Track>> {
         return api.fetchPlaylist(urlOrId)
     }

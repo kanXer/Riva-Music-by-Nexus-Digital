@@ -20,7 +20,12 @@
 
 ## ✨ Features
 
-- 🎧 **Instant Player & Fast Streaming**: Zero-lag direct playback powered by ExoPlayer / Media3 with background playback, lock screen controls, and rich media notifications.
+- 🔐 **Firebase Authentication & Cloud Sync**: Seamless Google Sign-In and Guest onboarding. Logged-in users automatically sync their offline library metadata and direct streams across devices via Firestore.
+- 📥 **Offline Music Storage**: Download tracks locally for offline listening with automated cloud backup for authenticated users.
+- 🎧 **Instant Player & Fast Streaming**: Zero-lag direct playback powered by ExoPlayer / Media3 with background playback, lock screen controls, and rich media notifications (featuring interactive Previous & Next controls).
+- 🚫 **Smart Autoplay Prevention**: Clean startup experience where playback only begins when initiated by the user.
+- 🔎 **YouTube Music Search & Live Suggestions**: Search songs, albums, artists and playlists with Metrolist-style live query suggestions, recommended songs, filter chips and recent search history.
+- ❤️ **Liked Songs & Smart Library**: Heart any track, then browse a library with liked songs, derived artist cards, in-library search, sorting, filter chips, downloaded songs, playlists and recent history.
 - 🔄 **Continuous Repeat All & Single Track Loops**: Smooth playlist looping that seamlessly returns to top (#1) on playlist completion or drag gesture.
 - 🌍 **Region & Country Personalization**: Select your country (India 🇮🇳, United States 🇺🇸, UK 🇬🇧, Canada 🇨🇦, UAE 🇦🇪, etc.) with localized YouTube InnerTube charts.
 - 🗣️ **Multi-Language Music Suggestions**: Choose multiple languages (Hindi, Punjabi, Bhojpuri, English, Haryanvi, Tamil, Telugu, etc.) with dynamically generated Home sections & mood chips.
@@ -56,6 +61,9 @@
 # Clone the repository
 git clone https://github.com/kanXer/Riva-Music-by-Nexus-Digital.git
 cd Riva-Music-by-Nexus-Digital
+
+# Copy the sample google-services config (or supply your own from Firebase)
+cp app/google-services.json.example app/google-services.json
 
 # Build Release APK
 ./gradlew assembleRelease

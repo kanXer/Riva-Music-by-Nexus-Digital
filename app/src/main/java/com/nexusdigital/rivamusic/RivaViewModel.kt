@@ -3,17 +3,31 @@ package com.nexusdigital.rivamusic
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.android.gms.auth.api.signin.GoogleSignInClient
+import com.nexusdigital.rivamusic.data.AuthRepository
+import com.nexusdigital.rivamusic.data.CloudTrack
 import com.nexusdigital.rivamusic.data.DownloadRepository
-import com.nexusdigital.rivamusic.data.LyricLine
 import com.nexusdigital.rivamusic.data.DownloadStatus
+import com.nexusdigital.rivamusic.data.FirestoreSyncRepository
 import com.nexusdigital.rivamusic.data.HomeSection
+import com.nexusdigital.rivamusic.data.LibraryRepository
+import com.nexusdigital.rivamusic.data.LikedTrack
+import com.nexusdigital.rivamusic.data.LyricLine
 import com.nexusdigital.rivamusic.data.MusicRepository
 import com.nexusdigital.rivamusic.data.Playlist
 import com.nexusdigital.rivamusic.data.PlaylistRepository
 import com.nexusdigital.rivamusic.data.RecentRepository
 import com.nexusdigital.rivamusic.data.RepeatMode
+import com.nexusdigital.rivamusic.data.SearchCollection
+import com.nexusdigital.rivamusic.data.SearchFilter
+import com.nexusdigital.rivamusic.data.SearchHistoryRepository
+import com.nexusdigital.rivamusic.data.SearchItem
+import com.nexusdigital.rivamusic.data.SearchSuggestions
+import com.nexusdigital.rivamusic.data.StreamResolution
 import com.nexusdigital.rivamusic.data.Track
+import com.nexusdigital.rivamusic.data.UserProfile
 import com.nexusdigital.rivamusic.playback.PlaybackEvent
+import com.nexusdigital.rivamusic.playback.PlaybackService
 import com.nexusdigital.rivamusic.playback.PlayerConnection
 import com.nexusdigital.rivamusic.playback.PlayerUiState
 import com.nexusdigital.rivamusic.ui.AVAILABLE_REGIONS
@@ -33,6 +47,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
 @OptIn(FlowPreview::class)
@@ -41,7 +56,14 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
     private val downloadsRepo = DownloadRepository(app)
     private val recentRepo = RecentRepository(app)
     private val playlistRepo = PlaylistRepository(app)
+    private val libraryRepo = LibraryRepository(app)
+    private val searchHistoryRepo = SearchHistoryRepository(app)
     private val player = PlayerConnection(app)
+    private val authRepo = AuthRepository(app)
+    val currentUser: StateFlow<UserProfile?> = authRepo.currentUser
+    private val firestoreSync = FirestoreSyncRepository()
+    private val _showAuthPrompt = MutableStateFlow(false)
+    val showAuthPrompt: StateFlow<Boolean> = _showAuthPrompt.asStateFlow()
     private val homePrefs = app.getSharedPreferences("riva_home_cache", android.content.Context.MODE_PRIVATE)
     private val playerPrefs = app.getSharedPreferences("riva_player_prefs", android.content.Context.MODE_PRIVATE)
     private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
@@ -55,6 +77,9 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
 
     val playerState: StateFlow<PlayerUiState> = player.state
     val playlists: StateFlow<List<Playlist>> = playlistRepo.playlists
+    val liked: StateFlow<List<LikedTrack>> = libraryRepo.liked
+    val likedIds: StateFlow<Set<String>> = libraryRepo.likedIds
+    val searchHistory: StateFlow<List<String>> = searchHistoryRepo.history
     val downloads: StateFlow<List<com.nexusdigital.rivamusic.data.DownloadedTrack>> =
         downloadsRepo.downloads
     val downloadProgress: StateFlow<Map<String, DownloadStatus>> = downloadsRepo.progress
@@ -77,6 +102,37 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _isSearching = MutableStateFlow(false)
     val isSearching: StateFlow<Boolean> = _isSearching.asStateFlow()
+
+    private val _searchFilter = MutableStateFlow(SearchFilter.SONGS)
+    val searchFilter: StateFlow<SearchFilter> = _searchFilter.asStateFlow()
+
+    private val _searchItems = MutableStateFlow<List<SearchItem>>(emptyList())
+    val searchItems: StateFlow<List<SearchItem>> = _searchItems.asStateFlow()
+
+    private val _searchSuggestions = MutableStateFlow(SearchSuggestions())
+    val searchSuggestions: StateFlow<SearchSuggestions> = _searchSuggestions.asStateFlow()
+
+    private val _isSuggesting = MutableStateFlow(false)
+    val isSuggesting: StateFlow<Boolean> = _isSuggesting.asStateFlow()
+
+    private val _searchCollection = MutableStateFlow<SearchCollection?>(null)
+    val searchCollection: StateFlow<SearchCollection?> = _searchCollection.asStateFlow()
+
+    private val _isOpeningCollection = MutableStateFlow(false)
+    val isOpeningCollection: StateFlow<Boolean> = _isOpeningCollection.asStateFlow()
+
+    private val itemSearchCache = object : LinkedHashMap<String, List<SearchItem>>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<SearchItem>>?): Boolean {
+            return size > 20
+        }
+    }
+    private val suggestionCache = object : LinkedHashMap<String, SearchSuggestions>(24, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, SearchSuggestions>?): Boolean {
+            return size > 30
+        }
+    }
+    private var searchJob: Job? = null
+    private var suggestionsJob: Job? = null
 
     private val initialRecent = recentRepo.recent.value
     private val _currentTrack = MutableStateFlow<Track?>(initialRecent.firstOrNull())
@@ -141,6 +197,9 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         music.setRegion(_selectedRegion.value.code)
+        if (currentUser.value != null && !currentUser.value!!.isGuest) {
+            syncCloudOfflineTracks()
+        }
         // Instant Home Screen: immediately show cached sections if available
         val cached = loadCachedHome()
         if (cached.isNotEmpty()) {
@@ -148,38 +207,12 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
             _trendingTracks.value = cached.firstOrNull { it.id == "trending" }?.tracks ?: emptyList()
         }
         loadHome()
+        observeSearch()
         viewModelScope.launch {
-            _searchQuery
-                .debounce(250)
-                .distinctUntilChanged()
-                .collectLatest { query ->
-                    val clean = query.trim()
-                    if (clean.isBlank()) {
-                        _searchResults.value = emptyList()
-                        _isSearching.value = false
-                        return@collectLatest
-                    }
-                    val normalized = clean.lowercase()
-                    val cachedResults = synchronized(searchCache) { searchCache[normalized] }
-                    if (cachedResults != null) {
-                        _searchResults.value = cachedResults
-                        _isSearching.value = false
-                        return@collectLatest
-                    }
-                    _isSearching.value = true
-                    try {
-                        val results = music.search(clean, 24)
-                        synchronized(searchCache) {
-                            searchCache[normalized] = results
-                        }
-                        _searchResults.value = results
-                    } catch (t: Throwable) {
-                        if (t is kotlinx.coroutines.CancellationException) throw t
-                        _messages.tryEmit("Search failed: ${t.message}")
-                    } finally {
-                        _isSearching.value = false
-                    }
-                }
+            _searchFilter.drop(1).collect { filter ->
+                val query = _searchQuery.value.trim()
+                if (query.isNotBlank()) performSearch(query, filter)
+            }
         }
         viewModelScope.launch {
             player.events.collect { event ->
@@ -349,9 +382,179 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
         _searchQuery.value = query
     }
 
+    fun submitSearch(query: String = _searchQuery.value) {
+        val clean = query.trim()
+        val previous = _searchQuery.value
+        _searchQuery.value = query
+        if (clean.isBlank()) return
+        searchHistoryRepo.add(clean)
+        // When the text actually changed the debounced observer will run the
+        // search; only run it here for an explicit re-submit of the same query.
+        if (previous == query) {
+            performSearch(clean, _searchFilter.value)
+        }
+    }
+
+    fun setSearchFilter(filter: SearchFilter) {
+        _searchFilter.value = filter
+    }
+
+    fun removeSearchHistory(query: String) = searchHistoryRepo.remove(query)
+
+    fun clearSearchHistory() = searchHistoryRepo.clear()
+
     fun clearSearch() {
+        searchJob?.cancel()
+        suggestionsJob?.cancel()
         _searchQuery.value = ""
         _searchResults.value = emptyList()
+        _searchItems.value = emptyList()
+        _searchSuggestions.value = SearchSuggestions()
+        _isSearching.value = false
+        _isSuggesting.value = false
+    }
+
+    fun toggleLiked(track: Track) {
+        val nowLiked = libraryRepo.toggle(track)
+        _messages.tryEmit(
+            if (nowLiked) "Added to Liked songs" else "Removed from Liked songs",
+        )
+    }
+
+    fun likeTrack(track: Track) {
+        libraryRepo.like(track)
+        _messages.tryEmit("Added to Liked songs")
+    }
+
+    fun unlikeTrack(trackId: String) {
+        libraryRepo.unlike(trackId)
+        _messages.tryEmit("Removed from Liked songs")
+    }
+
+    fun isLiked(trackId: String): Boolean = libraryRepo.isLiked(trackId)
+
+    fun playLiked(shuffle: Boolean = _shuffleEnabled.value) {
+        val tracks = liked.value.map { it.track }
+        if (tracks.isEmpty()) {
+            _messages.tryEmit("Liked songs empty hain — heart icon dabao")
+            return
+        }
+        playAll(tracks, shuffle, isPlaylist = true)
+    }
+
+    fun openSearchItem(item: SearchItem) {
+        val song = item.track
+        if (song != null) {
+            playTrack(song, _searchResults.value.ifEmpty { listOf(song) }, isPlaylist = true)
+            return
+        }
+        val browseId = item.browseId ?: item.id
+        if (_isOpeningCollection.value) return
+        viewModelScope.launch {
+            _isOpeningCollection.value = true
+            try {
+                _searchCollection.value = music.fetchMusicCollection(browseId, item.title)
+            } catch (t: Throwable) {
+                if (t is kotlinx.coroutines.CancellationException) throw t
+                _messages.tryEmit("Could not open ${item.title}: ${t.message}")
+            } finally {
+                _isOpeningCollection.value = false
+            }
+        }
+    }
+
+    fun closeSearchCollection() {
+        _searchCollection.value = null
+    }
+
+    private fun observeSearch() {
+        viewModelScope.launch {
+            _searchQuery
+                .debounce(260)
+                .distinctUntilChanged()
+                .collectLatest { query ->
+                    val clean = query.trim()
+                    if (clean.isBlank()) {
+                        _searchResults.value = emptyList()
+                        _searchItems.value = emptyList()
+                        _searchSuggestions.value = SearchSuggestions()
+                        _isSearching.value = false
+                        _isSuggesting.value = false
+                        return@collectLatest
+                    }
+                    loadSuggestions(clean)
+                    performSearch(clean, _searchFilter.value)
+                }
+        }
+    }
+
+    private fun performSearch(query: String, filter: SearchFilter) {
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
+            _isSearching.value = true
+            val cacheKey = "${filter.name}:${query.lowercase()}"
+            try {
+                if (filter == SearchFilter.SONGS) {
+                    val cached = synchronized(searchCache) { searchCache[cacheKey] }
+                    if (cached != null) {
+                        _searchResults.value = cached
+                        _searchItems.value = emptyList()
+                        return@launch
+                    }
+                    val musicTracks = runCatching { music.searchMusicTracks(query, 30) }
+                        .getOrDefault(emptyList())
+                    val tracks = if (musicTracks.isNotEmpty()) {
+                        musicTracks
+                    } else {
+                        // Fallback to the long-standing WEB search if YT Music
+                        // returns nothing for this query.
+                        runCatching { music.search(query, 24) }.getOrDefault(emptyList())
+                    }
+                    synchronized(searchCache) { searchCache[cacheKey] = tracks }
+                    _searchResults.value = tracks
+                    _searchItems.value = emptyList()
+                } else {
+                    val cached = synchronized(itemSearchCache) { itemSearchCache[cacheKey] }
+                    val items = cached ?: music.searchMusicItems(query, filter, 30).also { fresh ->
+                        synchronized(itemSearchCache) { itemSearchCache[cacheKey] = fresh }
+                    }
+                    _searchItems.value = items
+                    _searchResults.value = emptyList()
+                }
+            } catch (t: Throwable) {
+                if (t is kotlinx.coroutines.CancellationException) throw t
+                _messages.tryEmit("Search failed: ${t.message}")
+            } finally {
+                _isSearching.value = false
+            }
+        }
+    }
+
+    private fun loadSuggestions(query: String) {
+        suggestionsJob?.cancel()
+        suggestionsJob = viewModelScope.launch {
+            _isSuggesting.value = true
+            try {
+                val normalized = query.lowercase()
+                val cached = synchronized(suggestionCache) { suggestionCache[normalized] }
+                val data = cached ?: music.searchSuggestions(query).also { fresh ->
+                    synchronized(suggestionCache) { suggestionCache[normalized] = fresh }
+                }
+                val historyMatches = searchHistoryRepo.history.value
+                    .filter { it.contains(query, ignoreCase = true) && !it.equals(query, ignoreCase = true) }
+                    .take(2)
+                val queries = (historyMatches + data.queries)
+                    .filterNot { it.equals(query, ignoreCase = true) }
+                    .distinctBy { it.lowercase() }
+                    .take(8)
+                _searchSuggestions.value = data.copy(queries = queries)
+            } catch (t: Throwable) {
+                if (t is kotlinx.coroutines.CancellationException) throw t
+                _searchSuggestions.value = SearchSuggestions()
+            } finally {
+                _isSuggesting.value = false
+            }
+        }
     }
 
     private var isPlaylistMode: Boolean = false
@@ -417,36 +620,10 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * App open behaviour: agar player me kuch chal raha hai -> wahi raho.
-     * Pehli baar -> trending songs me se random. Uske baad -> last played song
-     * seedha shuru.
+     * App open: Do not auto-play audio. Audio only plays when user explicitly taps play.
      */
     fun autoStartOnLaunch() {
-        viewModelScope.launch {
-            val current = _currentTrack.value
-            if (current != null && playerState.value.hasMedia) return@launch
-            val last = recent.value.firstOrNull() ?: _currentTrack.value
-            if (last != null) {
-                val q = if (queue.value.isNotEmpty()) queue.value else listOf(last)
-                playTrack(last, q)
-            } else {
-                val primary = _selectedLanguages.value.firstOrNull() ?: "Hindi"
-                val regName = _selectedRegion.value.name
-                val query = if (_selectedRegion.value.code == "IN") {
-                    "trending songs in india 2026 $primary"
-                } else {
-                    "trending songs in $regName 2026"
-                }
-                val picks = runCatching { music.search(query, 20) }
-                    .getOrDefault(emptyList())
-                val pick = picks.randomOrNull()
-                if (pick != null) {
-                    playTrack(pick, picks)
-                } else {
-                    _messages.tryEmit("Internet nahi hai — search se gaana chun lo")
-                }
-            }
-        }
+        // No-op: user requested songs should never play on app startup.
     }
 
     /**
@@ -715,17 +892,112 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
 
     fun seekTo(positionMs: Long) = player.seekTo(positionMs)
 
+    fun openAuthPrompt() { _showAuthPrompt.value = true }
+    fun closeAuthPrompt() { _showAuthPrompt.value = false }
+    fun getGoogleSignInClient(): GoogleSignInClient = authRepo.getGoogleSignInClient()
+
+    fun signInWithGoogle(idToken: String, onResult: (Boolean, String?) -> Unit) {
+        authRepo.signInWithGoogleIdToken(idToken) { result ->
+            result.onSuccess { profile ->
+                _showAuthPrompt.value = false
+                _messages.tryEmit("Welcome, ${profile.displayName}!")
+                syncCloudOfflineTracks()
+                if (!homePrefs.getBoolean(KEY_LANGUAGES_CONFIGURED, false)) {
+                    _showLanguagePrompt.value = true
+                }
+                onResult(true, null)
+            }.onFailure { err ->
+                _messages.tryEmit("Login failed: ${err.message}")
+                onResult(false, err.message)
+            }
+        }
+    }
+
+    fun signInAsGuest(name: String, onComplete: () -> Unit) {
+        authRepo.signInAsGuest(name) { profile ->
+            _showAuthPrompt.value = false
+            _messages.tryEmit("Continuing as ${profile.displayName}")
+            if (!homePrefs.getBoolean(KEY_LANGUAGES_CONFIGURED, false)) {
+                _showLanguagePrompt.value = true
+            }
+            onComplete()
+        }
+    }
+
+    fun signOut(googleSignInClient: GoogleSignInClient?, onComplete: () -> Unit) {
+        authRepo.signOut(googleSignInClient) {
+            _messages.tryEmit("Signed out")
+            _showAuthPrompt.value = true
+            onComplete()
+        }
+    }
+
+    fun syncCloudOfflineTracks() {
+        val user = currentUser.value ?: return
+        if (user.isGuest) return
+        viewModelScope.launch {
+            try {
+                val cloudTracks = firestoreSync.fetchOfflineTracks(user.uid)
+                if (cloudTracks.isEmpty()) return@launch
+                val currentLocalIds = downloads.value.filterNot { it.isCached }.map { it.track.id }.toSet()
+                var added = 0
+
+                for (cloud in cloudTracks) {
+                    if (!currentLocalIds.contains(cloud.id)) {
+                        val track = Track(
+                            id = cloud.id,
+                            title = cloud.title,
+                            artist = cloud.artist,
+                            thumbnailUrl = cloud.thumbnailUrl,
+                            durationSeconds = cloud.durationSeconds,
+                        )
+                        runCatching {
+                            if (!cloud.audioUrl.isNullOrBlank()) {
+                                downloadsRepo.download(
+                                    track,
+                                    StreamResolution(
+                                        url = cloud.audioUrl,
+                                        mimeType = "audio/mp4",
+                                        itag = 140,
+                                        userAgent = PlaybackService.USER_AGENT,
+                                        headers = emptyMap(),
+                                    )
+                                )
+                                added++
+                            } else {
+                                val res = music.resolveAudio(track)
+                                downloadsRepo.download(track, res)
+                                added++
+                            }
+                        }
+                    }
+                }
+                if (added > 0) {
+                    _messages.tryEmit("Restored $added songs from your cloud account")
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
     fun download(track: Track) {
+        val user = currentUser.value
+        if (user == null || user.isGuest) {
+            _showAuthPrompt.value = true
+            _messages.tryEmit("Sign in with Google to save offline music")
+            return
+        }
         val entry = downloads.value.firstOrNull { it.track.id == track.id }
         if (entry != null && !entry.isCached) {
             _messages.tryEmit("Already saved for offline listening")
             return
         }
         if (entry != null && entry.isCached) {
-            // Cached copy exists — promote it to a permanent save instead of
-            // downloading again.
+            // Cached copy exists — promote it to a permanent save instead of downloading again.
             if (downloadsRepo.promoteToManual(track.id)) {
                 _messages.tryEmit("Saved offline permanently")
+                viewModelScope.launch {
+                    firestoreSync.saveOfflineTrack(user.uid, track)
+                }
             }
             return
         }
@@ -733,6 +1005,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val resolution = music.resolveAudio(track)
                 downloadsRepo.download(track, resolution)
+                firestoreSync.saveOfflineTrack(user.uid, track, resolution.url)
             } catch (t: Throwable) {
                 _messages.tryEmit("Download failed: ${t.message}")
             }
@@ -744,9 +1017,16 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
      * Falls back to a fresh manual download when the cached file is unusable.
      */
     fun promoteCachedToOffline(track: Track) {
+        val user = currentUser.value
+        if (user == null || user.isGuest) {
+            _showAuthPrompt.value = true
+            _messages.tryEmit("Sign in with Google to save offline music")
+            return
+        }
         viewModelScope.launch {
             if (downloadsRepo.promoteToManual(track.id)) {
                 _messages.tryEmit("Saved offline permanently")
+                firestoreSync.saveOfflineTrack(user.uid, track)
             } else {
                 downloadsRepo.delete(track.id)
                 download(track)
@@ -756,6 +1036,12 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
 
     fun deleteDownload(trackId: String) {
         downloadsRepo.delete(trackId)
+        val uid = currentUser.value?.uid
+        if (uid != null && !uid.startsWith("guest")) {
+            viewModelScope.launch {
+                firestoreSync.removeOfflineTrack(uid, trackId)
+            }
+        }
     }
 
     fun clearFinishedDownloadStatus(trackId: String) {

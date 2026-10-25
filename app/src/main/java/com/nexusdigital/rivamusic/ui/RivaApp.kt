@@ -3,7 +3,14 @@ package com.nexusdigital.rivamusic.ui
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.common.api.ApiException
+import com.nexusdigital.rivamusic.data.UserProfile
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -13,6 +20,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -34,6 +42,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.LibraryMusic
@@ -121,6 +131,15 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val searchResults by viewModel.searchResults.collectAsStateWithLifecycle()
     val isSearching by viewModel.isSearching.collectAsStateWithLifecycle()
+    val searchFilter by viewModel.searchFilter.collectAsStateWithLifecycle()
+    val searchItems by viewModel.searchItems.collectAsStateWithLifecycle()
+    val searchSuggestions by viewModel.searchSuggestions.collectAsStateWithLifecycle()
+    val isSuggesting by viewModel.isSuggesting.collectAsStateWithLifecycle()
+    val searchHistory by viewModel.searchHistory.collectAsStateWithLifecycle()
+    val searchCollection by viewModel.searchCollection.collectAsStateWithLifecycle()
+    val isOpeningCollection by viewModel.isOpeningCollection.collectAsStateWithLifecycle()
+    val liked by viewModel.liked.collectAsStateWithLifecycle()
+    val likedIds by viewModel.likedIds.collectAsStateWithLifecycle()
     val downloads by viewModel.downloads.collectAsStateWithLifecycle()
     val downloadProgress by viewModel.downloadProgress.collectAsStateWithLifecycle()
     val nowMs = remember { System.currentTimeMillis() }
@@ -145,6 +164,8 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
     val isResolving by viewModel.isResolving.collectAsStateWithLifecycle()
     val queueNow by viewModel.queueTracks.collectAsStateWithLifecycle()
     val lyricsNow by viewModel.lyrics.collectAsStateWithLifecycle()
+    val currentUser by viewModel.currentUser.collectAsStateWithLifecycle()
+    val showAuthPrompt by viewModel.showAuthPrompt.collectAsStateWithLifecycle()
 
     // "Saved offline" only counts manual saves; 30-day auto caches still show
     // the promote (⬇) option until permanently saved.
@@ -153,18 +174,94 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
     }
     val snackbarHostState = remember { SnackbarHostState() }
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
-    var showPlayer by rememberSaveable { mutableStateOf(true) }
+    // App hamesha Home par khule; full player sirf tab dikhe jab user
+    // khud koi song/collection play kare (ya mini-player tap kare).
+    var showPlayer by rememberSaveable { mutableStateOf(false) }
     var showCreatePlaylist by rememberSaveable { mutableStateOf(false) }
     var showImportPlaylist by rememberSaveable { mutableStateOf(false) }
     val isImportingPlaylist by viewModel.isImportingPlaylist.collectAsStateWithLifecycle()
     var playlistTrackToAdd by remember { mutableStateOf<Track?>(null) }
     var showSleepTimer by rememberSaveable { mutableStateOf(false) }
+    var showProfileSheet by rememberSaveable { mutableStateOf(false) }
     var showOfflineSheet by rememberSaveable { mutableStateOf(false) }
     var showRecentSheet by rememberSaveable { mutableStateOf(false) }
     var showTrendingSheet by rememberSaveable { mutableStateOf(false) }
     var showCachedSheet by rememberSaveable { mutableStateOf(false) }
     var showAllPlaylists by rememberSaveable { mutableStateOf(false) }
+    var showLikedSheet by rememberSaveable { mutableStateOf(false) }
     var selectedPlaylist by remember { mutableStateOf<Playlist?>(null) }
+    var selectedArtist by remember { mutableStateOf<Pair<String, List<Track>>?>(null) }
+
+    val context = LocalContext.current
+
+    val googleSignInLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+        runCatching {
+            val account = task.getResult(ApiException::class.java)
+            val idToken = account?.idToken
+            if (!idToken.isNullOrBlank()) {
+                viewModel.signInWithGoogle(idToken) { success, error ->
+                    if (!success && error != null) {
+                        Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } else {
+                Toast.makeText(context, "Sign in failed: No Google ID Token", Toast.LENGTH_SHORT).show()
+            }
+        }.onFailure { e ->
+            Toast.makeText(context, "Google Sign-in failed: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun triggerGoogleSignIn() {
+        val client = viewModel.getGoogleSignInClient()
+        googleSignInLauncher.launch(client.signInIntent)
+    }
+
+    // Song select karne par hi full player kholo. Ye helper home/search/library
+    // aur collection sheets — sab jagah use hota hai.
+    fun playSelectedTrack(
+        track: Track,
+        queue: List<Track> = listOf(track),
+        isPlaylist: Boolean = false,
+    ) {
+        viewModel.playTrack(track, queue, isPlaylist)
+        showPlayer = true
+    }
+
+    // Back pe pehle top-most dialog/sheet/player band karo, phir Home tab
+    // par jao. Home par back hi app exit karega.
+    BackHandler(
+        enabled = showProfileSheet || showLanguagePrompt || showSleepTimer || showCreatePlaylist ||
+            showImportPlaylist || playlistTrackToAdd != null || showPlayer ||
+            showAllPlaylists || showOfflineSheet || showCachedSheet ||
+            showRecentSheet || showTrendingSheet || showLikedSheet ||
+            selectedPlaylist != null || selectedArtist != null ||
+            searchCollection != null || isOpeningCollection || selectedTab != 0,
+    ) {
+        when {
+            showProfileSheet -> showProfileSheet = false
+            showLanguagePrompt -> viewModel.dismissLanguageSelector()
+            showSleepTimer -> showSleepTimer = false
+            showCreatePlaylist -> showCreatePlaylist = false
+            showImportPlaylist -> showImportPlaylist = false
+            playlistTrackToAdd != null -> playlistTrackToAdd = null
+            isOpeningCollection -> Unit
+            showPlayer -> showPlayer = false
+            showAllPlaylists -> showAllPlaylists = false
+            selectedPlaylist != null -> selectedPlaylist = null
+            selectedArtist != null -> selectedArtist = null
+            searchCollection != null -> viewModel.closeSearchCollection()
+            showOfflineSheet -> showOfflineSheet = false
+            showCachedSheet -> showCachedSheet = false
+            showRecentSheet -> showRecentSheet = false
+            showTrendingSheet -> showTrendingSheet = false
+            showLikedSheet -> showLikedSheet = false
+            selectedTab != 0 -> selectedTab = 0
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.messages.collect { message ->
@@ -172,7 +269,6 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
         }
     }
 
-    val context = LocalContext.current
     // App khule to net check: net connection na mile to direct offline songs list kholo
     LaunchedEffect(Unit) {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
@@ -184,9 +280,6 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
             selectedTab = 2 // Library screen
             showPlayer = false
             showOfflineSheet = true
-            viewModel.playOffline(false)
-        } else {
-            viewModel.autoStartOnLaunch()
         }
     }
 
@@ -194,6 +287,14 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
     // composables purane theme colors dikhate rehte hain.
     val systemDark = isSystemInDarkTheme()
     key(systemDark) {
+        if (currentUser == null) {
+            WelcomeAuthScreen(
+                onGoogleSignInClick = { triggerGoogleSignIn() },
+                onGuestSignInSubmit = { name ->
+                    viewModel.signInAsGuest(name) {}
+                },
+            )
+        } else {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -242,9 +343,11 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
                         downloadedIds = downloadedIds,
                         selectedRegion = selectedRegion,
                         selectedLanguages = selectedLanguages,
+                        userProfile = currentUser,
+                        onOpenProfile = { showProfileSheet = true },
                         onOpenLanguages = { viewModel.openLanguageSelector() },
                         onOpenTrending = { showTrendingSheet = true },
-                        onPlay = viewModel::playTrack,
+                        onPlay = { track, queue -> playSelectedTrack(track, queue) },
                         onDownload = viewModel::download,
                         onSearch = {
                             viewModel.setSearchQuery(it)
@@ -256,43 +359,66 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
                     1 -> SearchScreen(
                         query = searchQuery,
                         onQueryChange = viewModel::setSearchQuery,
+                        onSubmit = { viewModel.submitSearch(it) },
+                        onClear = viewModel::clearSearch,
                         isSearching = isSearching,
-                        results = searchResults,
+                        isSuggesting = isSuggesting,
+                        filter = searchFilter,
+                        onFilterChange = viewModel::setSearchFilter,
+                        tracks = searchResults,
+                        items = searchItems,
+                        suggestions = searchSuggestions,
+                        history = searchHistory,
+                        onRemoveHistory = viewModel::removeSearchHistory,
+                        onClearHistory = viewModel::clearSearchHistory,
                         currentId = currentTrack?.id ?: playerState.mediaId,
+                        likedIds = likedIds,
                         downloadStatuses = downloadProgress,
                         downloadedIds = downloadedIds,
-                        onPlay = viewModel::playTrack,
+                        onPlay = { track, queue -> playSelectedTrack(track, queue) },
                         onDownload = viewModel::download,
+                        onToggleLike = viewModel::toggleLiked,
+                        onOpenItem = viewModel::openSearchItem,
                     )
                     else -> LibraryScreen(
                         downloads = manualDownloads,
                         progress = downloadProgress,
-                        recent = recent,
-                        trendingTracks = trendingTracks,
-                        playlists = playlists,
-                        currentId = currentTrack?.id ?: playerState.mediaId,
-                        onPlayDownloaded = viewModel::playTrack,
-                        onPlayRecent = viewModel::playTrack,
-                        onPlayTrending = viewModel::playTrack,
-                        onOpenTrending = { showTrendingSheet = true },
-                        onPlayOffline = { shuffle -> viewModel.playOffline(shuffle) },
                         cachedTracks = cachedTracks,
                         cachedBytes = downloads
                             .filter { it.isCached && nowMs - it.cachedAt <= CACHE_TTL_MS }
                             .sumOf { it.sizeBytes },
-                        onPlayCached = { shuffle -> viewModel.playCached(shuffle) },
-                        onOpenCached = { showCachedSheet = true },
+                        recent = recent,
+                        trendingTracks = trendingTracks,
+                        playlists = playlists,
+                        liked = liked,
+                        currentId = currentTrack?.id ?: playerState.mediaId,
+                        onPlayTrack = { track, queue -> playSelectedTrack(track, queue) },
+                        onPlayLiked = { shuffle ->
+                            if (liked.isNotEmpty()) {
+                                viewModel.playLiked(shuffle)
+                                showPlayer = true
+                            }
+                        },
+                        onOpenLiked = { showLikedSheet = true },
+                        onToggleLike = viewModel::toggleLiked,
                         onDownload = viewModel::download,
-                        onDelete = viewModel::deleteDownload,
+                        onDeleteDownload = viewModel::deleteDownload,
                         onPlayPlaylist = viewModel::playPlaylist,
                         onDeletePlaylist = viewModel::deletePlaylist,
                         onNewPlaylist = { showCreatePlaylist = true },
                         onImportPlaylist = { showImportPlaylist = true },
-                        onOpenOffline = { showOfflineSheet = true },
-                        onOpenRecent = { showRecentSheet = true },
                         onOpenPlaylist = { playlist -> selectedPlaylist = playlist },
                         onOpenAllPlaylists = { showAllPlaylists = true },
+                        onOpenDownloaded = { showOfflineSheet = true },
+                        onOpenRecent = { showRecentSheet = true },
+                        onOpenCached = { showCachedSheet = true },
+                        onOpenTrending = { showTrendingSheet = true },
+                        onPlayOffline = { shuffle -> viewModel.playOffline(shuffle) },
+                        onPlayCached = { shuffle -> viewModel.playCached(shuffle) },
+                        onOpenArtist = { name, tracks -> selectedArtist = name to tracks },
                         onSearch = { selectedTab = 1 },
+                        userProfile = currentUser,
+                        onOpenProfile = { showProfileSheet = true },
                     )
                 }
             }
@@ -308,6 +434,7 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
                 isResolving = isResolving,
                 downloadedIds = downloadedIds,
                 downloadStatuses = downloadProgress,
+                likedIds = likedIds,
                 queue = queueNow,
                 shuffleEnabled = shuffleEnabled,
                 repeatMode = repeatMode,
@@ -331,6 +458,7 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
                 onCycleRepeat = viewModel::cycleRepeatMode,
                 onSleepTimer = { showSleepTimer = true },
                 onAddToPlaylist = { playlistTrackToAdd = sheetTrack },
+                onToggleLike = viewModel::toggleLiked,
                 onCancelSleepTimer = { viewModel.setSleepTimer(null) },
             )
         } else {
@@ -414,7 +542,10 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
                     viewModel.playAll(offlineTracks, shuffleEnabled, isPlaylist = true)
                 },
                 onShuffle = { viewModel.playAll(offlineTracks, true, isPlaylist = true) },
-                onTrackPlay = { track -> viewModel.playTrack(track, offlineTracks, isPlaylist = true) },
+                onTrackPlay = { track ->
+                    showOfflineSheet = false
+                    playSelectedTrack(track, offlineTracks, isPlaylist = true)
+                },
                 onRemoveTrack = {},
                 showRemove = false,
             )
@@ -440,7 +571,10 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
                 onRemoveOffline = viewModel::deleteDownload,
                 onPlayAll = { viewModel.playAll(cacheTrackList, shuffleEnabled, isPlaylist = true) },
                 onShuffle = { viewModel.playAll(cacheTrackList, true, isPlaylist = true) },
-                onTrackPlay = { track -> viewModel.playTrack(track, cacheTrackList, isPlaylist = true) },
+                onTrackPlay = { track ->
+                    showCachedSheet = false
+                    playSelectedTrack(track, cacheTrackList, isPlaylist = true)
+                },
                 onRemoveTrack = {},
                 showRemove = false,
             )
@@ -468,7 +602,10 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
                     viewModel.playAll(shuffled, true, isPlaylist = true)
                 }
             },
-            onTrackPlay = { track -> viewModel.playTrack(track, playlist.tracks, isPlaylist = true) },
+            onTrackPlay = { track ->
+                selectedPlaylist = null
+                playSelectedTrack(track, playlist.tracks, isPlaylist = true)
+            },
             onRemoveTrack = { viewModel.removeTrackFromPlaylist(playlist.id, it) },
             showRemove = true,
             onDeletePlaylist = {
@@ -495,7 +632,10 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
                 onRemoveOffline = viewModel::deleteDownload,
                 onPlayAll = { viewModel.playAll(recent, shuffleEnabled, isPlaylist = true) },
                 onShuffle = { viewModel.playAll(recent, true, isPlaylist = true) },
-                onTrackPlay = { track -> viewModel.playTrack(track, recent, isPlaylist = true) },
+                onTrackPlay = { track ->
+                    showRecentSheet = false
+                    playSelectedTrack(track, recent, isPlaylist = true)
+                },
                 onRemoveTrack = {},
                 showRemove = false,
             )
@@ -519,11 +659,97 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
                 onRemoveOffline = viewModel::deleteDownload,
                 onPlayAll = { viewModel.playAll(trendingTracks, shuffleEnabled, isPlaylist = true) },
                 onShuffle = { viewModel.playAll(trendingTracks, true, isPlaylist = true) },
-                onTrackPlay = { track -> viewModel.playTrack(track, trendingTracks, isPlaylist = true) },
+                onTrackPlay = { track ->
+                    showTrendingSheet = false
+                    playSelectedTrack(track, trendingTracks, isPlaylist = true)
+                },
                 onRemoveTrack = {},
                 showRemove = false,
             )
         }
+    }
+
+    if (showLikedSheet) {
+        val likedTracks = liked.map { it.track }
+        if (likedTracks.isEmpty()) {
+            showLikedSheet = false
+        } else {
+            CollectionSheet(
+                onDismiss = { showLikedSheet = false },
+                title = "Liked songs",
+                subtitle = "${likedTracks.size} songs • saved to your library",
+                tracks = likedTracks,
+                coverUrl = likedTracks.firstOrNull()?.thumbnailUrl,
+                selectedTrackId = currentTrack?.id ?: playerState.mediaId,
+                downloadStatuses = downloadProgress,
+                downloadedIds = downloadedIds,
+                onDownload = viewModel::download,
+                onRemoveOffline = viewModel::deleteDownload,
+                onPlayAll = { viewModel.playLiked(false) },
+                onShuffle = { viewModel.playLiked(true) },
+                onTrackPlay = { track ->
+                    showLikedSheet = false
+                    playSelectedTrack(track, likedTracks, isPlaylist = true)
+                },
+                onRemoveTrack = viewModel::unlikeTrack,
+                showRemove = true,
+            )
+        }
+    }
+
+    val artistDetail = selectedArtist
+    if (artistDetail != null) {
+        val (artistName, artistTracks) = artistDetail
+        CollectionSheet(
+            onDismiss = { selectedArtist = null },
+            title = artistName,
+            subtitle = "${artistTracks.size} songs in your library",
+            tracks = artistTracks,
+            coverUrl = artistTracks.firstOrNull()?.thumbnailUrl,
+            selectedTrackId = currentTrack?.id ?: playerState.mediaId,
+            downloadStatuses = downloadProgress,
+            downloadedIds = downloadedIds,
+            onDownload = viewModel::download,
+            onRemoveOffline = viewModel::deleteDownload,
+            onPlayAll = {
+                viewModel.playAll(artistTracks, shuffleEnabled, isPlaylist = true)
+            },
+            onShuffle = { viewModel.playAll(artistTracks, true, isPlaylist = true) },
+            onTrackPlay = { track ->
+                selectedArtist = null
+                playSelectedTrack(track, artistTracks, isPlaylist = true)
+            },
+            onRemoveTrack = {},
+            showRemove = false,
+        )
+    }
+
+    val openedCollection = searchCollection
+    if (openedCollection != null) {
+        CollectionSheet(
+            onDismiss = viewModel::closeSearchCollection,
+            title = openedCollection.title,
+            subtitle = openedCollection.subtitle,
+            tracks = openedCollection.tracks,
+            coverUrl = openedCollection.tracks.firstOrNull()?.thumbnailUrl,
+            selectedTrackId = currentTrack?.id ?: playerState.mediaId,
+            downloadStatuses = downloadProgress,
+            downloadedIds = downloadedIds,
+            onDownload = viewModel::download,
+            onRemoveOffline = viewModel::deleteDownload,
+            onPlayAll = {
+                viewModel.playAll(openedCollection.tracks, shuffleEnabled, isPlaylist = true)
+            },
+            onShuffle = {
+                viewModel.playAll(openedCollection.tracks, true, isPlaylist = true)
+            },
+            onTrackPlay = { track ->
+                viewModel.closeSearchCollection()
+                playSelectedTrack(track, openedCollection.tracks, isPlaylist = true)
+            },
+            onRemoveTrack = {},
+            showRemove = false,
+        )
     }
 
     if (showImportPlaylist) {
@@ -595,6 +821,63 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
             },
         )
     }
+
+    if (isOpeningCollection) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Ink.copy(alpha = 0.62f))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {},
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(34.dp),
+                    color = Lime,
+                    strokeWidth = 3.dp,
+                )
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    text = "Opening on YouTube Music...",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = TextPrimary,
+                )
+            }
+        }
+    }
+
+    if (showProfileSheet && currentUser != null) {
+        ProfileBottomSheet(
+            userProfile = currentUser!!,
+            onDismiss = { showProfileSheet = false },
+            onGoogleSignIn = {
+                showProfileSheet = false
+                triggerGoogleSignIn()
+            },
+            onChangeLanguages = {
+                viewModel.openLanguageSelector()
+            },
+            onSignOut = {
+                showProfileSheet = false
+                viewModel.signOut(viewModel.getGoogleSignInClient()) {}
+            },
+        )
+    }
+
+    if (showAuthPrompt) {
+        OfflineAuthPromptDialog(
+            onDismiss = { viewModel.closeAuthPrompt() },
+            onSignInGoogle = {
+                viewModel.closeAuthPrompt()
+                triggerGoogleSignIn()
+            },
+        )
+    }
+        }
     }
 }
 
@@ -714,6 +997,7 @@ private fun PlayerSheet(
     isResolving: Boolean,
     downloadedIds: Set<String>,
     downloadStatuses: Map<String, DownloadStatus>,
+    likedIds: Set<String>,
     queue: List<Track>,
     shuffleEnabled: Boolean,
     repeatMode: RepeatMode,
@@ -734,6 +1018,7 @@ private fun PlayerSheet(
     onCycleRepeat: () -> Unit,
     onSleepTimer: () -> Unit,
     onAddToPlaylist: () -> Unit,
+    onToggleLike: (Track) -> Unit,
     onCancelSleepTimer: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -1047,7 +1332,20 @@ private fun PlayerSheet(
                             downloaded = downloadedIds.contains(pageTrack.id),
                             onDownload = { onDownloadTrack(pageTrack) },
                         )
-                        Spacer(Modifier.width(14.dp))
+                        Spacer(Modifier.width(6.dp))
+                        IconButton(onClick = { onToggleLike(pageTrack) }, modifier = Modifier.size(40.dp)) {
+                            val isLiked = likedIds.contains(pageTrack.id)
+                            Icon(
+                                imageVector = if (isLiked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                contentDescription = if (isLiked) {
+                                    "Remove from Liked songs"
+                                } else {
+                                    "Add to Liked songs"
+                                },
+                                tint = if (isLiked) Coral else TextPrimary,
+                            )
+                        }
+                        Spacer(Modifier.width(6.dp))
                         IconButton(onClick = { onAddToPlaylist() }, modifier = Modifier.size(40.dp)) {
                             Icon(
                                 Icons.AutoMirrored.Rounded.PlaylistAdd,

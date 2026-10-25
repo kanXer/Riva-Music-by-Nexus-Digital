@@ -2,6 +2,7 @@ plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.compose.compiler)
   alias(libs.plugins.kotlin.serialization)
+  alias(libs.plugins.google.services)
 }
 
 android {
@@ -11,8 +12,8 @@ android {
         applicationId = "com.nexusdigital.rivamusic"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.0.1"
+        versionCode = 4
+        versionName = "1.1.1"
     }
 
     signingConfigs {
@@ -91,6 +92,13 @@ dependencies {
   // Media playback
   implementation(libs.androidx.media3.exoplayer)
   implementation(libs.androidx.media3.session)
+
+  // Firebase & Google Auth
+  val firebaseBom = platform(libs.firebase.bom)
+  implementation(firebaseBom)
+  implementation(libs.firebase.auth)
+  implementation(libs.firebase.firestore)
+  implementation(libs.play.services.auth)
 
   // Networking / images / serialization
   implementation(libs.okhttp)

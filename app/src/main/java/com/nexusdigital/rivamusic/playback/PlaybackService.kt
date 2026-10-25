@@ -37,6 +37,7 @@ class PlaybackService : MediaSessionService() {
     private val closeButton = CommandButton.Builder()
         .setDisplayName("Close")
         .setSessionCommand(closeCommand)
+        .setIconResId(R.drawable.ic_notif_close)
         .setCustomIconResId(R.drawable.ic_notif_close)
         .build()
 
@@ -44,6 +45,7 @@ class PlaybackService : MediaSessionService() {
     private val nextButton = CommandButton.Builder()
         .setDisplayName("Next")
         .setSessionCommand(nextCommand)
+        .setIconResId(R.drawable.ic_notif_next)
         .setCustomIconResId(R.drawable.ic_notif_next)
         .build()
 
@@ -51,6 +53,7 @@ class PlaybackService : MediaSessionService() {
     private val prevButton = CommandButton.Builder()
         .setDisplayName("Previous")
         .setSessionCommand(prevCommand)
+        .setIconResId(R.drawable.ic_notif_prev)
         .setCustomIconResId(R.drawable.ic_notif_prev)
         .build()
 
@@ -191,7 +194,9 @@ class PlaybackService : MediaSessionService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-        mediaSession = MediaSession.Builder(this, player)
+        val forwardingPlayer = RivaForwardingPlayer(player)
+
+        mediaSession = MediaSession.Builder(this, forwardingPlayer)
             .setSessionActivity(sessionActivity)
             .setCallback(sessionCallback)
             .setCustomLayout(ImmutableList.of(prevButton, nextButton, closeButton))
@@ -247,5 +252,43 @@ class PlaybackService : MediaSessionService() {
                 SimpleCache(cacheDir, evictor, databaseProvider).also { mediaCache = it }
             }
         }
+    }
+}
+
+@OptIn(UnstableApi::class)
+private class RivaForwardingPlayer(player: Player) : androidx.media3.common.ForwardingPlayer(player) {
+    override fun getAvailableCommands(): Player.Commands {
+        return super.getAvailableCommands().buildUpon()
+            .add(Player.COMMAND_SEEK_TO_NEXT)
+            .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+            .add(Player.COMMAND_SEEK_TO_PREVIOUS)
+            .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+            .build()
+    }
+
+    override fun isCommandAvailable(command: Int): Boolean {
+        return when (command) {
+            Player.COMMAND_SEEK_TO_NEXT,
+            Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
+            Player.COMMAND_SEEK_TO_PREVIOUS,
+            Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> true
+            else -> super.isCommandAvailable(command)
+        }
+    }
+
+    override fun seekToNext() {
+        PlaybackService.playbackEventListener?.invoke(PlaybackEvent.SkipNext)
+    }
+
+    override fun seekToNextMediaItem() {
+        PlaybackService.playbackEventListener?.invoke(PlaybackEvent.SkipNext)
+    }
+
+    override fun seekToPrevious() {
+        PlaybackService.playbackEventListener?.invoke(PlaybackEvent.SkipPrevious)
+    }
+
+    override fun seekToPreviousMediaItem() {
+        PlaybackService.playbackEventListener?.invoke(PlaybackEvent.SkipPrevious)
     }
 }
