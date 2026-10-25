@@ -122,7 +122,7 @@ class InnerTubeClient(
     suspend fun searchMusicTracks(query: String, limit: Int = 30): List<Track> =
         searchMusic(query, SearchFilter.SONGS, limit)
             .mapNotNull { it.track }
-            .filter { it.durationSeconds > 0 || it.title.isNotBlank() }
+            .filter { isRealSong(it.title, it.durationSeconds) }
             .distinctBy { it.id }
             .take(limit)
 
@@ -285,10 +285,21 @@ class InnerTubeClient(
             null -> textType ?: inferredType ?: return null
         }
 
+        val fixedDuration = this["fixedColumns"].asArrayOrNull()
+            ?.firstNotNullOfOrNull { col ->
+                col.asObjectOrNull()
+                    ?.get("musicResponsiveListItemFixedColumnRenderer").asObjectOrNull()
+                    ?.get("text").asTextRuns()
+                    ?.let { text -> if (DURATION_REGEX.matches(text)) parseDuration(text) else null }
+            }
         val detailSegments = if (textType != null) segments.drop(1) else segments
-        val duration = detailSegments.firstNotNullOfOrNull { segment ->
+        val duration = fixedDuration ?: detailSegments.firstNotNullOfOrNull { segment ->
             if (DURATION_REGEX.matches(segment)) parseDuration(segment) else null
         } ?: 0
+
+        if (filter == SearchFilter.SONGS && !isRealSong(title, duration)) {
+            return null
+        }
         val statWords = listOf("plays", "views", "monthly audience", "subscribers", "songs", "episodes")
         val meaningful = detailSegments.filterNot { segment ->
             DURATION_REGEX.matches(segment) ||
@@ -370,9 +381,17 @@ class InnerTubeClient(
         val id = watchVideoId() ?: firstFlexRunVideoId()
             ?: this["playlistItemData"].asObjectOrNull()?.get("videoId").asStringOrNull()
             ?: return null
-        val duration = segments.firstNotNullOfOrNull { segment ->
+        val fixedDuration = this["fixedColumns"].asArrayOrNull()
+            ?.firstNotNullOfOrNull { col ->
+                col.asObjectOrNull()
+                    ?.get("musicResponsiveListItemFixedColumnRenderer").asObjectOrNull()
+                    ?.get("text").asTextRuns()
+                    ?.let { text -> if (DURATION_REGEX.matches(text)) parseDuration(text) else null }
+            }
+        val duration = fixedDuration ?: segments.firstNotNullOfOrNull { segment ->
             if (DURATION_REGEX.matches(segment)) parseDuration(segment) else null
         } ?: 0
+        if (!isRealSong(title, duration)) return null
         val statWords = listOf("plays", "views", "monthly audience", "subscribers", "songs", "episodes")
         val meaningful = segments.filterNot { segment ->
             DURATION_REGEX.matches(segment) ||
@@ -814,7 +833,8 @@ class InnerTubeClient(
             ?.get("url")
             .asStringOrNull()
 
-        if (duration <= 0) return null
+        if (duration <= 0 || duration > 720) return null
+        if (!isRealSong(title, duration)) return null
         if (this["badges"].toString().contains("LIVE", ignoreCase = true)) return null
 
         return Track(
@@ -950,6 +970,22 @@ class InnerTubeClient(
             "song", "video", "album", "single", "ep", "artist",
             "playlist", "podcast", "episode", "profile",
         )
+
+        fun isRealSong(title: String, durationSeconds: Int): Boolean {
+            if (durationSeconds in 1..25) return false
+            if (durationSeconds > 720) return false // > 12 mins is not a standalone song
+            val lower = title.lowercase()
+            val bannedKeywords = listOf(
+                "jukebox", "mashup", "non stop", "nonstop", "non-stop",
+                "full album", "full audio songs", "all songs", "audio jukebox",
+                "video jukebox", "hours", "hour", "1 hr", "2 hr", "3 hr", "4 hr", "5 hr", "6 hr", "7 hr", "8 hr",
+                "mega mix", "megamix", "compilation"
+            )
+            for (keyword in bannedKeywords) {
+                if (lower.contains(keyword)) return false
+            }
+            return true
+        }
         // Carousel shelf headers ("Releases for you", "Videos", ...) are
         // section labels, not the album/artist/playlist title. Keeping them
         // here made collection sheets show the wrong heading.

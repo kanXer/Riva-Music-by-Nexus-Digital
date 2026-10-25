@@ -261,37 +261,39 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
                 else -> "Trending songs in ${region.name}"
             }
             val trendingQuery = when (region.code) {
-                "IN" -> "trending songs in india 2026 ${chosen.take(2).joinToString(" ")}"
-                "WW" -> "global trending songs 2026 top hits"
-                else -> "trending songs in ${region.name} 2026"
+                "IN" -> "trending songs in india"
+                "WW" -> "global trending songs top hits"
+                else -> "trending songs in ${region.name}"
             }
+            val trendingChartId = if (region.code == "IN") "VLPL4fGSI1pDJn40WjZ6utkIuj2rNg-7iGsq" else null
             specs.add(
                 HomeSectionSpec(
                     id = "trending",
                     title = trendingTitle,
-                    subtitle = "Top viral hits in ${region.name} • ${chosen.take(3).joinToString(", ")}",
+                    subtitle = "Top viral hits in ${region.name} • YouTube Music",
                     query = trendingQuery,
+                    chartBrowseId = trendingChartId,
                 )
             )
 
             // 2. Dedicated language sections
             for (lang in chosen.take(4)) {
                 val spec = when (lang.lowercase()) {
-                    "hindi" -> HomeSectionSpec("hindi", "Bollywood & Hindi Hits", "Big screen, bigger hooks", "bollywood hits 2026")
-                    "english" -> HomeSectionSpec("english", "Global Pop Hits", "Catchy, loud and brand new", "pop english hits 2026")
-                    "punjabi" -> HomeSectionSpec("punjabi", "Punjabi Bangers", "Bhangra beats & high bass", "punjabi hits 2026")
-                    "bhojpuri" -> HomeSectionSpec("bhojpuri", "Bhojpuri Dhamaka", "Desi vibes & festive party", "bhojpuri hits 2026")
-                    "haryanvi" -> HomeSectionSpec("haryanvi", "Haryanvi Hits", "Desi swag & folk beats", "haryanvi hits 2026")
-                    "tamil" -> HomeSectionSpec("tamil", "Tamil Blockbusters", "Kollywood chartbusters", "tamil hits 2026")
-                    "telugu" -> HomeSectionSpec("telugu", "Telugu Chartbusters", "Tollywood sensations", "telugu hits 2026")
-                    "malayalam" -> HomeSectionSpec("malayalam", "Malayalam Melodies", "Soulful God's own sounds", "malayalam hits 2026")
-                    "kannada" -> HomeSectionSpec("kannada", "Kannada Hits", "Sandalwood chartbusters", "kannada hits 2026")
-                    "bengali" -> HomeSectionSpec("bengali", "Bengali Melodies", "Sweet rhythms & modern hits", "bengali hits 2026")
-                    "marathi" -> HomeSectionSpec("marathi", "Marathi Dhamaal", "Energetic & folk vibes", "marathi hits 2026")
-                    "gujarati" -> HomeSectionSpec("gujarati", "Gujarati Garba & Hits", "Dhol beats & festive folk", "gujarati hits 2026")
-                    "rajasthani" -> HomeSectionSpec("rajasthani", "Rajasthani Folk & Hits", "Desert melodies & dance", "rajasthani hits 2026")
-                    "urdu" -> HomeSectionSpec("urdu", "Urdu Ghazals & Hits", "Poetic & soulful melodies", "urdu hits 2026")
-                    else -> HomeSectionSpec(lang.lowercase(), "$lang Hits", "Top tracks in $lang", "$lang hits 2026")
+                    "hindi" -> HomeSectionSpec("hindi", "Bollywood & Hindi Hits", "Top Hindi chartbusters", "bollywood hits", "VLPL4fGSI1pDJn5RgLW0Sb_zECecWdH_4zOX")
+                    "english" -> HomeSectionSpec("english", "Global Pop Hits", "Top international hits", "pop english hits", "VLPL4fGSI1pDJn49TUu37nJoN2QTeYuRwmNv")
+                    "punjabi" -> HomeSectionSpec("punjabi", "Punjabi Bangers", "Bhangra beats & high bass", "punjabi hits", "VLPL4fGSI1pDJn5JXkyIohg2RstsbL2SnRew")
+                    "bhojpuri" -> HomeSectionSpec("bhojpuri", "Bhojpuri Dhamaka", "Desi vibes & festive party", "bhojpuri hits", "VLPL4fGSI1pDJn4ivDqrsepD3tvHsp0KTDRM")
+                    "haryanvi" -> HomeSectionSpec("haryanvi", "Haryanvi Hits", "Desi swag & folk beats", "haryanvi hits", "VLPL4fGSI1pDJn4tiNLMZVGGt2Kghgw__2u0")
+                    "tamil" -> HomeSectionSpec("tamil", "Tamil Blockbusters", "Kollywood chartbusters", "tamil hits", "VLPL4fGSI1pDJn4WX22qg1Po7qKOwOb4H6Sk")
+                    "telugu" -> HomeSectionSpec("telugu", "Telugu Chartbusters", "Tollywood sensations", "telugu hits", "VLPL4fGSI1pDJn5ALuqpEj_YZ8mEyw9WN8jd")
+                    "malayalam" -> HomeSectionSpec("malayalam", "Malayalam Melodies", "Soulful God's own sounds", "malayalam hits songs")
+                    "kannada" -> HomeSectionSpec("kannada", "Kannada Hits", "Sandalwood chartbusters", "kannada hits songs")
+                    "bengali" -> HomeSectionSpec("bengali", "Bengali Melodies", "Sweet rhythms & modern hits", "bengali hits songs")
+                    "marathi" -> HomeSectionSpec("marathi", "Marathi Dhamaal", "Energetic & folk vibes", "marathi hits songs")
+                    "gujarati" -> HomeSectionSpec("gujarati", "Gujarati Garba & Hits", "Dhol beats & festive folk", "gujarati hits songs")
+                    "rajasthani" -> HomeSectionSpec("rajasthani", "Rajasthani Folk & Hits", "Desert melodies & dance", "rajasthani hits songs")
+                    "urdu" -> HomeSectionSpec("urdu", "Urdu Ghazals & Hits", "Poetic & soulful melodies", "urdu hits songs")
+                    else -> HomeSectionSpec(lang.lowercase(), "$lang Hits", "Top tracks in $lang", "$lang hits songs")
                 }
                 specs.add(spec)
             }
@@ -303,15 +305,28 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
                     id = "chill",
                     title = "Chill & Focus",
                     subtitle = "Low-key beats for deep work",
-                    query = "$primaryLang lofi study beats",
+                    query = "$primaryLang lofi acoustic songs",
                 )
             )
 
             val loaded = coroutineScope {
                 specs.map { spec ->
                     async {
-                        spec to runCatching { music.search(spec.query, 12) }
-                            .getOrElse { emptyList() }
+                        var tracks: List<Track> = emptyList()
+                        if (!spec.chartBrowseId.isNullOrBlank()) {
+                            tracks = runCatching {
+                                music.fetchMusicCollection(spec.chartBrowseId, spec.title).tracks
+                                    .filter { music.isRealSong(it) }
+                                    .take(20)
+                            }.getOrElse { emptyList() }
+                        }
+                        if (tracks.isEmpty()) {
+                            tracks = runCatching {
+                                music.searchMusicTracks(spec.query, 20)
+                                    .filter { music.isRealSong(it) }
+                            }.getOrElse { emptyList() }
+                        }
+                        spec to tracks
                     }
                 }.awaitAll()
             }
@@ -374,7 +389,10 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
     private fun loadCachedHome(): List<HomeSection> {
         val raw = homePrefs.getString(KEY_HOME_SECTIONS, null) ?: return emptyList()
         return runCatching {
-            json.decodeFromString<List<HomeSection>>(raw)
+            val list = json.decodeFromString<List<HomeSection>>(raw)
+            list.map { sec ->
+                sec.copy(tracks = sec.tracks.filter { music.isRealSong(it) })
+            }.filter { it.tracks.isNotEmpty() }
         }.getOrElse { emptyList() }
     }
 
@@ -503,12 +521,14 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     val musicTracks = runCatching { music.searchMusicTracks(query, 30) }
                         .getOrDefault(emptyList())
+                        .filter { music.isRealSong(it) }
                     val tracks = if (musicTracks.isNotEmpty()) {
                         musicTracks
                     } else {
                         // Fallback to the long-standing WEB search if YT Music
                         // returns nothing for this query.
                         runCatching { music.search(query, 24) }.getOrDefault(emptyList())
+                            .filter { music.isRealSong(it) }
                     }
                     synchronized(searchCache) { searchCache[cacheKey] = tracks }
                     _searchResults.value = tracks
@@ -751,10 +771,11 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
         }
         val seen = mutableSetOf(track.id)
         for (query in queries) {
-            val found = runCatching { music.search(query, 25) }
+            val found = runCatching { music.searchMusicTracks(query, 25) }
                 .getOrDefault(emptyList())
+                .ifEmpty { runCatching { music.search(query, 25) }.getOrDefault(emptyList()) }
                 .asSequence()
-                .filter { it.id !in seen && it.durationSeconds > 0 }
+                .filter { it.id !in seen && music.isRealSong(it) }
                 .filter { cand -> titleTokens(cand.title).intersect(curKey).size < 2 }
                 .filter { it.id != track.id }
                 .distinctBy { it.id }
@@ -1175,6 +1196,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
         val title: String,
         val subtitle: String,
         val query: String,
+        val chartBrowseId: String? = null,
     )
 
     companion object {

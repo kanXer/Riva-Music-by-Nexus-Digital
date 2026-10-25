@@ -18,6 +18,9 @@ class MusicRepository(
         return api.search(clean, limit)
     }
 
+    fun isRealSong(track: Track): Boolean =
+        InnerTubeClient.isRealSong(track.title, track.durationSeconds)
+
     suspend fun searchMusicTracks(query: String, limit: Int = 30): List<Track> =
         api.searchMusicTracks(query, limit)
 
