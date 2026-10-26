@@ -12,8 +12,8 @@ android {
         applicationId = "com.nexusdigital.rivamusic"
         minSdk = 26
         targetSdk = 36
-        versionCode = 19
-        versionName = "1.1.7"
+        versionCode = 20
+        versionName = "1.1.8"
     }
 
     signingConfigs {

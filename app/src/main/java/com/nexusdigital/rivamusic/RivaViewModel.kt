@@ -217,15 +217,19 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
     val isLoadingSimilar: StateFlow<Boolean> = _isLoadingSimilar.asStateFlow()
 
     fun loadSimilarTracks(track: Track) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             _isLoadingSimilar.value = true
             val userLangs = _selectedLanguages.value.ifEmpty { setOf("Hindi") }
             val primaryLang = userLangs.firstOrNull() ?: "Hindi"
             val radio = runCatching { music.fetchRadioTracks(track.id, 40) }.getOrDefault(emptyList())
                 .filter { music.isRealSong(it) && isMatchingSelectedLanguages(it, userLangs) }
-            val searchResults = runCatching { music.searchMusicTracks("$primaryLang ${track.artist} hits", 30) }
-                .getOrDefault(emptyList())
-                .filter { music.isRealSong(it) && isMatchingSelectedLanguages(it, userLangs) }
+            val searchResults = if (radio.size < 20) {
+                runCatching { music.searchMusicTracks("$primaryLang ${track.artist} hits", 30) }
+                    .getOrDefault(emptyList())
+                    .filter { music.isRealSong(it) && isMatchingSelectedLanguages(it, userLangs) }
+            } else {
+                emptyList()
+            }
             _similarTracks.value = (radio + searchResults).distinctBy { it.id }.take(50)
             _isLoadingSimilar.value = false
         }
@@ -746,7 +750,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
         if (_repeatMode.value == RepeatMode.ONE || isPlaylistMode) return
         if (queue.value.size > 1) return
         val cur = _currentTrack.value ?: return
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val chain = relatedChain(cur)
             if (chain.isNotEmpty() && queue.value.size <= 1 && !isPlaylistMode && _repeatMode.value != RepeatMode.ONE) {
                 val merged = listOf(cur) + chain
@@ -1244,37 +1248,31 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
             if (seen.add(it.id)) collected.add(it)
         }
 
-        // 2. Targeted search using the selected languages & artist/mood to guarantee 100% matching language
-        val curWords = titleTokens(track.title)
-        val curKey = curWords.take(3).toSet()
-        val mood = moodOf("${track.title} ${track.artist}")
+        // 2. Only fallback to targeted search if Automix radio didn't provide enough tracks (< 15)
+        if (collected.size < 15) {
+            val curWords = titleTokens(track.title)
+            val curKey = curWords.take(3).toSet()
+            val primaryLang = userLangs.firstOrNull() ?: "Hindi"
+            val queries = listOf(
+                "$primaryLang ${track.artist} hits",
+                "best $primaryLang ${track.artist} songs"
+            )
 
-        val queries = buildList {
-            for (lang in userLangs) {
-                add("$lang ${track.artist} hits")
-                if (mood.isNotEmpty()) {
-                    add("$lang ${mood.joinToString(" ")} songs".trim())
+            for (query in queries) {
+                if (collected.size >= 25) break
+                val found = runCatching { music.searchMusicTracks(query, 25) }
+                    .getOrDefault(emptyList())
+                    .ifEmpty { runCatching { music.search(query, 25) }.getOrDefault(emptyList()) }
+                    .asSequence()
+                    .filter { it.id !in seen && music.isRealSong(it) && isMatchingSelectedLanguages(it, userLangs) }
+                    .filter { cand -> titleTokens(cand.title).intersect(curKey).size < 2 }
+                    .filter { it.id != track.id }
+                    .distinctBy { it.id }
+                    .take(10)
+                    .toList()
+                found.forEach {
+                    if (seen.add(it.id)) collected.add(it)
                 }
-                add("best $lang ${track.artist} songs")
-                add("top $lang hit songs")
-                add("$lang ${track.title.take(30)} ${track.artist}")
-            }
-        }
-
-        for (query in queries) {
-            if (collected.size >= 25) break
-            val found = runCatching { music.searchMusicTracks(query, 25) }
-                .getOrDefault(emptyList())
-                .ifEmpty { runCatching { music.search(query, 25) }.getOrDefault(emptyList()) }
-                .asSequence()
-                .filter { it.id !in seen && music.isRealSong(it) && isMatchingSelectedLanguages(it, userLangs) }
-                .filter { cand -> titleTokens(cand.title).intersect(curKey).size < 2 }
-                .filter { it.id != track.id }
-                .distinctBy { it.id }
-                .take(10)
-                .toList()
-            found.forEach {
-                if (seen.add(it.id)) collected.add(it)
             }
         }
         return collected
@@ -1655,8 +1653,13 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
         resolveJob?.cancel()
         _currentTrack.value = track
         _isResolving.value = true
-        // Prefetch lyrics immediately so they display with zero delay on tap
-        requestLyrics(track)
+
+        // Defer lyrics prefetch slightly so it doesn't steal network bandwidth during initial player open / stream resolution
+        viewModelScope.launch(Dispatchers.IO) {
+            delay(500L)
+            requestLyrics(track)
+        }
+
         resolveJob = viewModelScope.launch {
             try {
                 val local = downloadsRepo.localPath(track.id)
@@ -1667,9 +1670,11 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     val resolution = music.resolveAudio(track)
                     player.play(track, resolution.url)
-                    // Auto-cache: recently played tracks get saved for offline replay
-                    // for the next 30 days.
-                    downloadsRepo.autoCache(track, resolution)
+                    // Auto-cache: defer download slightly so ExoPlayer can buffer smoothly without disk/network contention
+                    viewModelScope.launch(Dispatchers.IO) {
+                        delay(2500L)
+                        downloadsRepo.autoCache(track, resolution)
+                    }
                 }
                 recentRepo.add(track)
                 autoSkips = 0

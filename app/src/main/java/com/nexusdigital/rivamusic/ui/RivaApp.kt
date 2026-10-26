@@ -1,6 +1,7 @@
 package com.nexusdigital.rivamusic.ui
 
 import android.content.Context
+import kotlinx.coroutines.delay
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.widget.Toast
@@ -1194,7 +1195,11 @@ private fun PlayerSheet(
         onPrevious()
     }
 
-    LaunchedEffect(Unit) { onViewOpened() }
+    LaunchedEffect(Unit) {
+        // Delay related queue fetching so player slide-in animation completes buttery-smooth with 0 jank
+        delay(600L)
+        onViewOpened()
+    }
 
     Box(
         modifier = Modifier
