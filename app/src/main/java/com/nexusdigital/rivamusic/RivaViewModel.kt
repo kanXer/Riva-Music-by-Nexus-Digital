@@ -240,7 +240,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
     init {
         music.setRegion(_selectedRegion.value.code)
         if (currentUser.value != null && !currentUser.value!!.isGuest) {
-            syncCloudOfflineTracks()
+            syncCloudOfflineTracks(showNotice = false)
             syncCloudPreferences()
         }
         // Instant Home Screen: immediately show cached sections if available
@@ -1394,7 +1394,17 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun togglePlayPause() = player.togglePlayPause()
+    fun togglePlayPause() {
+        val cur = _currentTrack.value
+        val loadedMediaId = playerState.value.mediaId
+        if (cur != null && (loadedMediaId == null || loadedMediaId != cur.id)) {
+            val idx = queue.value.indexOfFirst { it.id == cur.id }
+            if (idx >= 0) queueIndex = idx
+            startTrack(cur)
+        } else {
+            player.togglePlayPause()
+        }
+    }
 
     fun seekTo(positionMs: Long) = player.seekTo(positionMs)
 
@@ -1407,7 +1417,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
             result.onSuccess { profile ->
                 _showAuthPrompt.value = false
                 _messages.tryEmit("Welcome, ${profile.displayName}!")
-                syncCloudOfflineTracks()
+                syncCloudOfflineTracks(showNotice = true)
                 syncCloudPreferences()
                 if (!homePrefs.getBoolean(KEY_LANGUAGES_CONFIGURED, false)) {
                     _showLanguagePrompt.value = true
@@ -1467,10 +1477,10 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun syncCloudOfflineTracks() {
+    fun syncCloudOfflineTracks(showNotice: Boolean = false) {
         val user = currentUser.value ?: return
         if (user.isGuest) return
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val cloudTracks = firestoreSync.fetchOfflineTracks(user.uid)
                 if (cloudTracks.isEmpty()) return@launch
@@ -1478,7 +1488,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
                 var added = 0
 
                 for (cloud in cloudTracks) {
-                    if (!currentLocalIds.contains(cloud.id)) {
+                    if (!currentLocalIds.contains(cloud.id) && !downloadsRepo.isDownloaded(cloud.id)) {
                         val track = Track(
                             id = cloud.id,
                             title = cloud.title,
@@ -1487,27 +1497,13 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
                             durationSeconds = cloud.durationSeconds,
                         )
                         runCatching {
-                            if (!cloud.audioUrl.isNullOrBlank()) {
-                                downloadsRepo.download(
-                                    track,
-                                    StreamResolution(
-                                        url = cloud.audioUrl,
-                                        mimeType = "audio/mp4",
-                                        itag = 140,
-                                        userAgent = PlaybackService.USER_AGENT,
-                                        headers = emptyMap(),
-                                    )
-                                )
-                                added++
-                            } else {
-                                val res = music.resolveAudio(track)
-                                downloadsRepo.download(track, res)
-                                added++
-                            }
+                            val res = music.resolveAudio(track)
+                            downloadsRepo.download(track, res)
+                            added++
                         }
                     }
                 }
-                if (added > 0) {
+                if (added > 0 && showNotice) {
                     _messages.tryEmit("Restored $added songs from your cloud account")
                 }
             } catch (_: Exception) {}

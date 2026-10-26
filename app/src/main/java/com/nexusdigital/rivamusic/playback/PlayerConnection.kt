@@ -90,7 +90,9 @@ class PlayerConnection(context: Context) {
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED) {
-                _events.tryEmit(PlaybackEvent.Ended)
+                if (controller?.currentMediaItem != null) {
+                    _events.tryEmit(PlaybackEvent.Ended)
+                }
             }
             controller?.let(::sync)
         }
@@ -147,6 +149,7 @@ class PlayerConnection(context: Context) {
 
     fun togglePlayPause() {
         val c = controller ?: return
+        if (c.currentMediaItem == null) return
         when {
             c.isPlaying -> c.pause()
             c.playbackState == Player.STATE_ENDED -> {
