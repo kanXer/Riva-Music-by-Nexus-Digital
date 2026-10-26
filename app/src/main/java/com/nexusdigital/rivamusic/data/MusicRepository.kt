@@ -2,6 +2,7 @@ package com.nexusdigital.rivamusic.data
 
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.withContext
 
 class MusicRepository(
@@ -48,25 +49,29 @@ class MusicRepository(
     suspend fun fetchRadioTracks(videoId: String, limit: Int = 50): List<Track> =
         api.fetchRadioTracks(videoId, limit)
 
-    /** Time-synced lyrics: BetterLyrics API (TTML, https://api.betterlyrics.org) pahle, phir LRCLIB fallback. */
+    /** Time-synced lyrics: BetterLyrics API (TTML) & LRCLIB (LRC) concurrently queried for instant response. */
     suspend fun timedLyrics(track: Track): List<LyricLine>? = withContext(Dispatchers.IO) {
         timedLyricsCache[track.id]?.let { return@withContext it }
 
-        // 1. BetterLyrics API (primary synced provider)
-        val blResult = runCatching {
-            betterLyrics.fetchSynced(track.artist, track.title, track.durationSeconds)
-        }.getOrNull()?.takeIf { it.size > 2 }
+        val blDeferred = async {
+            runCatching {
+                betterLyrics.fetchSynced(track.artist, track.title, track.durationSeconds)
+            }.getOrNull()?.takeIf { it.size > 2 }
+        }
 
+        val lrcDeferred = async {
+            runCatching {
+                lrc.searchSynced(track.artist, track.title, track.durationSeconds)
+            }.getOrNull()?.takeIf { it.size > 2 }
+        }
+
+        val blResult = blDeferred.await()
         if (blResult != null) {
             timedLyricsCache[track.id] = blResult
             return@withContext blResult
         }
 
-        // 2. LRCLIB (LRC format) fallback
-        val lrcResult = runCatching {
-            lrc.searchSynced(track.artist, track.title, track.durationSeconds)
-        }.getOrNull()?.takeIf { it.size > 2 }
-
+        val lrcResult = lrcDeferred.await()
         if (lrcResult != null) {
             timedLyricsCache[track.id] = lrcResult
             return@withContext lrcResult

@@ -1,5 +1,10 @@
 package com.nexusdigital.rivamusic.ui
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.layout.BoxWithConstraints
+import kotlinx.coroutines.delay
 import android.content.Intent
 import android.graphics.PointF
 import androidx.compose.ui.platform.LocalContext
@@ -54,6 +59,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.nexusdigital.rivamusic.LyricsUi
+import com.nexusdigital.rivamusic.data.LyricLine
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -730,9 +736,9 @@ fun AppleGlassButton(
 }
 
 /**
- * Shared Realtime Synced & Plain Lyrics View.
- * Displays synced lyrics (LRCLIB / BetterLyrics) with auto-scroll and highlight,
- * plain lyrics fallback, or loading / meme states.
+ * Shared Realtime Synced Lyrics View.
+ * Displays synced lyrics (LRCLIB / BetterLyrics or auto-paced fallback) with smooth auto-scroll,
+ * radiant Lime active line highlighting, scale animation, and tap-to-seek.
  */
 @Composable
 fun SyncedLyricsView(
@@ -752,130 +758,189 @@ fun SyncedLyricsView(
             CircularProgressIndicator(color = Lime, strokeWidth = 3.dp)
             Spacer(Modifier.height(14.dp))
             Text(
-                text = "Searching realtime lyrics from BetterLyrics...",
+                text = "Searching realtime lyrics from BetterLyrics & LRCLIB...",
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextSecondary,
             )
         }
-    } else if (lyrics.failed || (!lyrics.synced && lyrics.lines.isEmpty())) {
+    } else if (lyrics.failed || (!lyrics.synced && lyrics.lines.isEmpty()) || (lyrics.synced && lyrics.syncedLines.isEmpty())) {
         NoLyricsAvailableView(modifier = modifier)
-    } else if (lyrics.synced && lyrics.syncedLines.isNotEmpty()) {
+    } else {
         val listState = rememberLazyListState()
         var manualOffsetMs by remember(lyrics) { mutableLongStateOf(0L) }
         val effectiveMs = (positionMs + manualOffsetMs).coerceAtLeast(0L)
         val activeIndex = lyrics.syncedLines.indexOfLast { it.startMs <= effectiveMs }
 
-        LaunchedEffect(activeIndex) {
-            if (activeIndex >= 0) {
-                listState.animateScrollToItem(activeIndex, scrollOffset = -120)
+        var userIsScrolling by remember { mutableStateOf(false) }
+
+        LaunchedEffect(listState.isScrollInProgress) {
+            if (listState.isScrollInProgress) {
+                userIsScrolling = true
+            } else {
+                delay(2000L)
+                userIsScrolling = false
             }
         }
 
-        Column(modifier = modifier) {
-            // Fine-tune timing nudge controls (allows syncing by ±0.5s if a specific upload has an intro delay)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+        LaunchedEffect(activeIndex, userIsScrolling) {
+            if (activeIndex >= 0 && !userIsScrolling) {
+                listState.animateScrollToItem(activeIndex, scrollOffset = 0)
+            }
+        }
+
+        BoxWithConstraints(modifier = modifier) {
+            val centerPadding = (maxHeight / 2 - 28.dp).coerceAtLeast(16.dp)
+
+            Column(modifier = Modifier.fillMaxSize()) {
+                // Header badge + fine tune timing
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
-                        .clip(CircleShape)
-                        .background(if (RivaIsDark) Color.White.copy(alpha = 0.06f) else PanelBorder.copy(alpha = 0.5f))
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        text = "-0.5s",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (manualOffsetMs < 0) Lime else TextSecondary,
+                    if (lyrics.isAutoPaced) {
+                        Text(
+                            text = "Auto-Paced Sync",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextFaint,
+                        )
+                    } else {
+                        Text(
+                            text = "Realtime Synced",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Lime,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+
+                    // Fine-tune timing nudge controls
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
-                            .clickable { manualOffsetMs -= 500L }
+                            .clip(CircleShape)
+                            .background(if (RivaIsDark) Color.White.copy(alpha = 0.06f) else PanelBorder.copy(alpha = 0.5f))
                             .padding(horizontal = 6.dp, vertical = 2.dp),
-                    )
-                    Text(
-                        text = if (manualOffsetMs == 0L) "Sync" else "${if (manualOffsetMs > 0) "+" else ""}${manualOffsetMs / 1000f}s",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (manualOffsetMs != 0L) Lime else TextFaint,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier
-                            .clickable { manualOffsetMs = 0L }
-                            .padding(horizontal = 4.dp, vertical = 2.dp),
-                    )
-                    Text(
-                        text = "+0.5s",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (manualOffsetMs > 0) Lime else TextSecondary,
-                        modifier = Modifier
-                            .clickable { manualOffsetMs += 500L }
-                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                    )
+                    ) {
+                        Text(
+                            text = "-0.5s",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (manualOffsetMs < 0) Lime else TextSecondary,
+                            modifier = Modifier
+                                .clickable { manualOffsetMs -= 500L }
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                        Text(
+                            text = if (manualOffsetMs == 0L) "Sync" else "${if (manualOffsetMs > 0) "+" else ""}${manualOffsetMs / 1000f}s",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (manualOffsetMs != 0L) Lime else TextFaint,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .clickable { manualOffsetMs = 0L }
+                                .padding(horizontal = 4.dp, vertical = 2.dp),
+                        )
+                        Text(
+                            text = "+0.5s",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (manualOffsetMs > 0) Lime else TextSecondary,
+                            modifier = Modifier
+                                .clickable { manualOffsetMs += 500L }
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentPadding = PaddingValues(top = centerPadding, bottom = centerPadding),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    itemsIndexed(
+                        items = lyrics.syncedLines,
+                        key = { index, line -> "${line.startMs}_$index" },
+                    ) { index, line ->
+                        val isActive = index == activeIndex
+                        val isPast = index < activeIndex
+                        val distance = kotlin.math.abs(index - activeIndex)
+
+                        LyricLineRow(
+                            line = line,
+                            isActive = isActive,
+                            isPast = isPast,
+                            distance = distance,
+                            canSeek = canSeek,
+                            onSeek = onSeek,
+                            onRestrictedAction = onRestrictedAction,
+                        )
+                    }
                 }
             }
+        }
+    }
+}
 
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                contentPadding = PaddingValues(vertical = 40.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
+@Composable
+private fun LyricLineRow(
+    line: LyricLine,
+    isActive: Boolean,
+    isPast: Boolean,
+    distance: Int,
+    canSeek: Boolean,
+    onSeek: (Long) -> Unit,
+    onRestrictedAction: (String) -> Unit,
+) {
+    val scale by animateFloatAsState(
+        targetValue = if (isActive) 1.08f else 0.96f,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "LyricScale",
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = if (isActive) 5.dp else 3.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(RoundedCornerShape(14.dp))
+            .background(
+                if (isActive) Lime.copy(alpha = 0.14f) else Color.Transparent
+            )
+            .border(
+                width = if (isActive) 1.dp else 0.dp,
+                color = if (isActive) Lime.copy(alpha = 0.40f) else Color.Transparent,
+                shape = RoundedCornerShape(14.dp),
+            )
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
             ) {
-                itemsIndexed(lyrics.syncedLines) { index, line ->
-                    val isActive = index == activeIndex
-                    val isPast = index < activeIndex
-                    val distance = kotlin.math.abs(index - activeIndex)
-
-                    Text(
-                        text = line.text,
-                        style = if (isActive) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium,
-                        color = when {
-                            isActive -> Lime
-                            distance == 1 -> TextPrimary.copy(alpha = 0.70f)
-                            isPast -> TextFaint.copy(alpha = 0.35f)
-                            else -> TextSecondary.copy(alpha = 0.35f)
-                        },
-                        fontWeight = if (isActive) FontWeight.ExtraBold else FontWeight.Medium,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = if (isActive) 12.dp else 8.dp)
-                            .graphicsLayer {
-                                scaleX = if (isActive) 1.08f else 0.96f
-                                scaleY = if (isActive) 1.08f else 0.96f
-                            }
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                            ) {
-                                if (canSeek) {
-                                    onSeek(line.startMs)
-                                } else {
-                                    onRestrictedAction("Sign in with Google to jump to lyric lines! 🔒")
-                                }
-                            },
-                    )
+                if (canSeek) {
+                    onSeek(line.startMs)
+                } else {
+                    onRestrictedAction("Sign in with Google to jump to lyric lines! 🔒")
                 }
             }
-        }
-    } else {
-        Column(
-            modifier = modifier.verticalScroll(rememberScrollState()),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-        ) {
-            lyrics.lines.forEachIndexed { index, line ->
-                Text(
-                    text = line.ifBlank { " " },
-                    style = MaterialTheme.typography.titleMedium,
-                    color = if (index % 2 == 0) TextPrimary else TextSecondary,
-                    textAlign = TextAlign.Center,
-                )
-                Spacer(Modifier.height(10.dp))
-            }
-        }
+            .padding(horizontal = 14.dp, vertical = if (isActive) 10.dp else 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = line.text,
+            style = if (isActive) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium,
+            color = when {
+                isActive -> Lime
+                distance == 1 -> TextPrimary.copy(alpha = 0.75f)
+                isPast -> TextFaint.copy(alpha = 0.35f)
+                else -> TextSecondary.copy(alpha = 0.50f)
+            },
+            fontWeight = if (isActive) FontWeight.ExtraBold else FontWeight.Medium,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 
@@ -900,9 +965,16 @@ fun FullScreenPlayerOverlay(
     onNext: () -> Unit,
     onPrevious: () -> Unit,
     onDismiss: () -> Unit,
+    onLyrics: (Track) -> Unit = {},
 ) {
     var showLyrics by remember { mutableStateOf(false) }
     val context = LocalContext.current
+
+    LaunchedEffect(showLyrics, track.id) {
+        if (showLyrics && lyrics == null) {
+            onLyrics(track)
+        }
+    }
 
     Dialog(
         onDismissRequest = onDismiss,

@@ -33,63 +33,29 @@ class LrcLibClient(
     /** [startMs, line] sorted list ya null (synced nahi mila). */
     suspend fun searchSynced(artist: String, title: String, durationSeconds: Int): List<LyricLine>? =
         withContext(Dispatchers.IO) {
-            val cleanArtist = cleanArtistName(artist)
-            val cleanTitle = cleanSongTitle(title)
-            val encArtist = urlEncoded(cleanArtist)
-            val encTitle = urlEncoded(cleanTitle)
-            val encQuery = urlEncoded("$cleanArtist $cleanTitle")
+            val queries = getLyricSearchQueries(artist, title)
 
-            // 1. Strict GET with duration match
-            if (durationSeconds > 0) {
-                val strictUrl = "https://lrclib.net/api/get?artist_name=$encArtist&track_name=$encTitle&duration=$durationSeconds"
-                val strictEl = runCatching { request(strictUrl) }.getOrNull()
-                if (strictEl is JsonObject) {
-                    val synced = (strictEl["syncedLyrics"] as? JsonPrimitive)?.contentOrNull
-                    if (!synced.isNullOrBlank()) {
-                        val lines = parseLrc(synced)
-                        if (lines.isNotEmpty()) return@withContext lines
-                    }
-                }
-            }
+            for (query in queries) {
+                val encQuery = urlEncoded(query)
+                val searchUrl = "https://lrclib.net/api/search?q=$encQuery"
+                val searchEl = runCatching { request(searchUrl) }.getOrNull()
+                if (searchEl is JsonArray && searchEl.isNotEmpty()) {
+                    val candidates = searchEl.mapNotNull { it as? JsonObject }
+                        .filter { obj ->
+                            val synced = (obj["syncedLyrics"] as? JsonPrimitive)?.contentOrNull
+                            !synced.isNullOrBlank()
+                        }
 
-            // 2. Lenient GET verified by duration
-            val lenientUrl = "https://lrclib.net/api/get?artist_name=$encArtist&track_name=$encTitle"
-            val lenientEl = runCatching { request(lenientUrl) }.getOrNull()
-            if (lenientEl is JsonObject) {
-                val candidateDur = (lenientEl["duration"] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull() ?: 0.0
-                val durDiff = if (durationSeconds > 0) kotlin.math.abs(candidateDur - durationSeconds) else 0.0
-                if (durDiff <= 6.0) {
-                    val synced = (lenientEl["syncedLyrics"] as? JsonPrimitive)?.contentOrNull
-                    if (!synced.isNullOrBlank()) {
-                        val lines = parseLrc(synced)
-                        if (lines.isNotEmpty()) return@withContext lines
-                    }
-                }
-            }
+                    if (candidates.isNotEmpty()) {
+                        val bestCandidate = if (durationSeconds > 0) {
+                            candidates.minByOrNull { obj ->
+                                val dur = (obj["duration"] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull() ?: durationSeconds.toDouble()
+                                kotlin.math.abs(dur - durationSeconds)
+                            } ?: candidates.first()
+                        } else {
+                            candidates.first()
+                        }
 
-            // 3. Search: sort candidates by closest duration to avoid live/remix mismatches
-            val searchUrl = "https://lrclib.net/api/search?q=$encQuery"
-            val searchEl = runCatching { request(searchUrl) }.getOrNull()
-            if (searchEl is JsonArray) {
-                val candidates = searchEl.mapNotNull { it as? JsonObject }
-                    .filter { obj ->
-                        val synced = (obj["syncedLyrics"] as? JsonPrimitive)?.contentOrNull
-                        !synced.isNullOrBlank()
-                    }
-
-                val bestCandidate = if (durationSeconds > 0) {
-                    candidates.minByOrNull { obj ->
-                        val dur = (obj["duration"] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull() ?: 0.0
-                        kotlin.math.abs(dur - durationSeconds)
-                    }
-                } else {
-                    candidates.firstOrNull()
-                }
-
-                if (bestCandidate != null) {
-                    val candDur = (bestCandidate["duration"] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull() ?: 0.0
-                    val durDiff = if (durationSeconds > 0) kotlin.math.abs(candDur - durationSeconds) else 0.0
-                    if (durDiff <= 8.0 || durationSeconds <= 0) {
                         val synced = (bestCandidate["syncedLyrics"] as? JsonPrimitive)?.contentOrNull
                         if (!synced.isNullOrBlank()) {
                             val lines = parseLrc(synced)

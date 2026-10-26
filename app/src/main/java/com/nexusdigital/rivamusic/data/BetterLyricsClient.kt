@@ -29,7 +29,7 @@ class BetterLyricsClient(
 
     suspend fun fetchSynced(artist: String, title: String, durationSeconds: Int): List<LyricLine>? =
         withContext(Dispatchers.IO) {
-            val cleanArtist = cleanArtistName(artist)
+            val cleanArtist = if (isRecordLabel(artist)) "" else cleanArtistName(artist)
             val cleanTitle = cleanSongTitle(title)
 
             val attempts = mutableListOf<String>()
@@ -37,12 +37,6 @@ class BetterLyricsClient(
                 attempts += buildUrl(cleanTitle, cleanArtist, durationSeconds)
             }
             attempts += buildUrl(cleanTitle, cleanArtist, null)
-            if (cleanTitle != title.trim() || cleanArtist != artist.trim()) {
-                if (durationSeconds > 0) {
-                    attempts += buildUrl(title.trim(), artist.trim(), durationSeconds)
-                }
-                attempts += buildUrl(title.trim(), artist.trim(), null)
-            }
 
             for (url in attempts) {
                 try {
@@ -54,6 +48,8 @@ class BetterLyricsClient(
                         .build()
 
                     http.newCall(request).execute().use { response ->
+                        // 401: uncached query requiring API key — do not waste time on further attempts
+                        if (response.code == 401) return@withContext null
                         if (!response.isSuccessful) return@use
                         val text = response.body?.string().orEmpty()
                         if (text.isBlank()) return@use

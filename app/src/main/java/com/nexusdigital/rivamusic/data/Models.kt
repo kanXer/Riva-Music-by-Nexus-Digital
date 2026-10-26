@@ -96,6 +96,20 @@ data class LyricLine(
     val text: String,
 )
 
+val RECORD_LABEL_PATTERNS = listOf(
+    "t-series", "tseries", "zee music", "sony music", "sonymusic",
+    "tips official", "tips music", "yrf", "saregama", "speed records",
+    "geet mp3", "white hill", "desi melodies", "aditya music",
+    "lahari music", "times music", "eros now", "svf", "bongo",
+    "speed punjabi", "single track studios", "jass records",
+    "vevo", "official channel", "records", "music company"
+)
+
+fun isRecordLabel(name: String): Boolean {
+    val low = name.lowercase().trim()
+    return RECORD_LABEL_PATTERNS.any { low.contains(it) }
+}
+
 /**
  * Cleans YouTube track titles to remove noise like "Official Video", "| Aashiqui 2",
  * "ft. ...", parentheses, so lyrics providers (LRCLIB / BetterLyrics) find exact matches fast.
@@ -105,9 +119,6 @@ fun cleanSongTitle(title: String): String {
         .replace(Regex("\\(.*?\\)"), " ")
         .replace(Regex("\\[.*?\\]"), " ")
         .split('|')[0]
-        .split('-')[0]
-        .split('–')[0]
-        .split('—')[0]
         .split(Regex("(?i)\\b(feat\\.|feat|ft\\.|ft)\\b"))[0]
         .replace(Regex("(?i)\\b(official|lyrics?|video|audio|full song|hd|4k)\\b.*"), "")
         .replace(Regex("\\s+"), " ")
@@ -129,4 +140,44 @@ fun cleanArtistName(artist: String): String {
         .replace(Regex("\\s+"), " ")
         .trim()
     return clean.ifBlank { artist.trim() }
+}
+
+/**
+ * Generates ranked candidate queries for LRCLIB search.
+ * Handles record labels (e.g. T-Series, Zee Music) by falling back to title,
+ * and handles "Movie - Song" / "Song - Movie" patterns.
+ */
+fun getLyricSearchQueries(artist: String, title: String): List<String> {
+    val ca = cleanArtistName(artist)
+    val ct = cleanSongTitle(title)
+    val isLabel = isRecordLabel(artist) || isRecordLabel(ca)
+
+    val hyphenParts = if (ct.contains('-') || ct.contains('–') || ct.contains('—')) {
+        ct.split('-', '–', '—').map { it.trim() }.filter { it.isNotBlank() }
+    } else {
+        emptyList()
+    }
+
+    val queries = mutableListOf<String>()
+    if (!isLabel && ca.isNotBlank()) {
+        queries += "$ca $ct"
+        for (part in hyphenParts) {
+            queries += "$ca $part"
+        }
+    }
+
+    queries += ct
+    for (part in hyphenParts) {
+        queries += part
+    }
+
+    val seen = mutableSetOf<String>()
+    val out = mutableListOf<String>()
+    for (q in queries) {
+        val norm = q.replace(Regex("\\s+"), " ").trim()
+        if (norm.isNotBlank() && seen.add(norm.lowercase())) {
+            out += norm
+        }
+    }
+    return out
 }

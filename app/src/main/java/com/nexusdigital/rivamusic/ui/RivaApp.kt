@@ -554,6 +554,7 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
             onNext = viewModel::playNext,
             onPrevious = viewModel::playPrevious,
             onDismiss = { isFullScreen = false },
+            onLyrics = viewModel::requestLyrics,
         )
     }
 

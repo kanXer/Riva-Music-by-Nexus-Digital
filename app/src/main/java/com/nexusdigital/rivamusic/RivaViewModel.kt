@@ -781,21 +781,60 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
                 runCatching { music.lyrics(track) }.getOrNull()
             }
 
-            // Realtime time-synced lyrics (LRCLIB ~600ms, phir BetterLyrics)
+            // Realtime time-synced lyrics (LRCLIB & BetterLyrics concurrent)
             val timed = runCatching { music.timedLyrics(track) }.getOrNull()
             if (!timed.isNullOrEmpty()) {
                 android.util.Log.d("RivaLyrics", "synced ${track.id}: ${timed.size} lines")
-                _lyrics.value = _lyrics.value + (track.id to LyricsUi(syncedLines = timed, synced = true))
+                _lyrics.value = _lyrics.value + (track.id to LyricsUi(
+                    syncedLines = timed,
+                    synced = true,
+                    isAutoPaced = false,
+                ))
                 return@launch
             }
 
-            // Agar synced nahi mila, plain lyrics ready milengi
+            // Agar synced nahi mila, plain lyrics ko real-time pace karo taaki highlight hamesha chale
             val plain = plainDeferred.await()
-            val lines = plain?.lines.orEmpty()
+            val lines = plain?.lines.orEmpty().filter { it.isNotBlank() }
+            if (lines.isNotEmpty()) {
+                val durSec = track.durationSeconds.takeIf { it > 0 }
+                    ?: (player.state.value.durationMs / 1000).toInt()
+                val autoPaced = generateAutoPacedLyrics(lines, durSec)
+                android.util.Log.d("RivaLyrics", "auto-paced ${track.id}: ${autoPaced.size} lines")
+                _lyrics.value = _lyrics.value + (track.id to LyricsUi(
+                    lines = lines,
+                    syncedLines = autoPaced,
+                    synced = true,
+                    isAutoPaced = true,
+                ))
+                return@launch
+            }
+
             _lyrics.value = _lyrics.value + (track.id to LyricsUi(
-                lines = lines,
-                failed = lines.isEmpty(),
+                lines = emptyList(),
+                failed = true,
+                synced = false,
             ))
+        }
+    }
+
+    private fun generateAutoPacedLyrics(lines: List<String>, durationSeconds: Int): List<LyricLine> {
+        val clean = lines.filter { it.isNotBlank() }
+        if (clean.isEmpty()) return emptyList()
+        val totalDurMs = (if (durationSeconds > 0) durationSeconds * 1000L else clean.size * 5000L).coerceAtLeast(30_000L)
+        val introMs = (totalDurMs * 0.08f).toLong().coerceIn(3000L, 15000L)
+        val outroMs = (totalDurMs * 0.06f).toLong().coerceIn(3000L, 12000L)
+        val singableMs = (totalDurMs - introMs - outroMs).coerceAtLeast(10_000L)
+
+        val totalChars = clean.sumOf { it.length.coerceAtLeast(8) }
+        var currentMs = introMs
+
+        return clean.map { line ->
+            val lineStart = currentMs
+            val weight = line.length.coerceAtLeast(8).toFloat() / totalChars
+            val lineDuration = (singableMs * weight).toLong().coerceIn(1800L, 10000L)
+            currentMs += lineDuration
+            LyricLine(startMs = lineStart, text = line)
         }
     }
 
@@ -1695,4 +1734,5 @@ data class LyricsUi(
     val failed: Boolean = false,
     val syncedLines: List<LyricLine> = emptyList(),
     val synced: Boolean = false,
+    val isAutoPaced: Boolean = false,
 )
