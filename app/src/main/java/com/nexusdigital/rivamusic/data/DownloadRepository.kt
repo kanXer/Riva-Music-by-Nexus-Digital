@@ -5,6 +5,7 @@ import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -25,7 +26,12 @@ class DownloadRepository(context: Context) {
     private val json = Json { ignoreUnknownKeys = true }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val jobs = ConcurrentHashMap<String, Job>()
+    private val activeManualFlags = ConcurrentHashMap<String, AtomicBoolean>()
+    private val activeSuccessCallbacks = ConcurrentHashMap<String, () -> Unit>()
+    private val activeErrorCallbacks = ConcurrentHashMap<String, (String) -> Unit>()
+
     private val http = NetworkModule.getOkHttpClient(appContext).newBuilder()
+        .cache(null) // Do NOT use HTTP cache for large audio downloads
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
@@ -44,27 +50,79 @@ class DownloadRepository(context: Context) {
 
     fun isDownloaded(trackId: String): Boolean = localPath(trackId) != null
 
-    fun download(track: Track, resolution: StreamResolution, cache: Boolean = false) {
-        if (isDownloaded(track.id)) return
-        if (jobs[track.id]?.isActive == true) return
+    fun isManualDownloaded(trackId: String): Boolean =
+        _downloads.value.firstOrNull { it.track.id == trackId && !it.isCached }?.filePath
+            ?.let { File(it).exists() && File(it).length() > 0L } == true
 
-        val cachedAt = if (cache) System.currentTimeMillis() else 0L
+    fun isJobActive(trackId: String): Boolean = jobs[trackId]?.isActive == true
+
+    fun promoteActiveJob(
+        trackId: String,
+        onSuccess: (() -> Unit)? = null,
+        onError: ((String) -> Unit)? = null,
+    ): Boolean {
+        if (jobs[trackId]?.isActive == true) {
+            activeManualFlags[trackId]?.set(true)
+            if (onSuccess != null) activeSuccessCallbacks[trackId] = onSuccess
+            if (onError != null) activeErrorCallbacks[trackId] = onError
+            _progress.update { it + (trackId to DownloadStatus.Downloading(0.05f, 0, -1)) }
+            return true
+        }
+        return false
+    }
+
+    fun download(
+        track: Track,
+        resolution: StreamResolution,
+        cache: Boolean = false,
+        onSuccess: (() -> Unit)? = null,
+        onError: ((String) -> Unit)? = null,
+    ) {
+        // If already manually saved and file exists on disk, nothing to do
+        if (!cache && isManualDownloaded(track.id)) {
+            _progress.update { it + (track.id to DownloadStatus.Completed) }
+            onSuccess?.invoke()
+            return
+        }
+
+        // If a background job is already active, promote to manual if requested
+        if (jobs[track.id]?.isActive == true) {
+            if (!cache) {
+                promoteActiveJob(track.id, onSuccess, onError)
+            }
+            return
+        }
+
+        val isManualFlag = AtomicBoolean(!cache)
+        activeManualFlags[track.id] = isManualFlag
+        if (onSuccess != null) activeSuccessCallbacks[track.id] = onSuccess
+        if (onError != null) activeErrorCallbacks[track.id] = onError
+
         val job = scope.launch {
             val temp = File(downloadsDir, "${safeName(track.id)}.part")
             val target = File(downloadsDir, "${safeName(track.id)}.mp4")
             try {
-                // Silent cache (30-day auto) UI me progress NAHI dikhta —
-                // "Downloading" section sirf manual saves ke liye.
-                if (!cache) {
+                if (isManualFlag.get()) {
                     _progress.update { it + (track.id to DownloadStatus.Downloading(0f, 0, -1)) }
                 }
                 temp.delete()
-                val request = Request.Builder()
+
+                val requestBuilder = Request.Builder()
                     .url(resolution.url)
                     .header("User-Agent", resolution.userAgent.ifBlank { DEFAULT_UA })
                     .header("Referer", "https://www.youtube.com/")
                     .header("Origin", "https://www.youtube.com")
-                    .build()
+
+                resolution.headers.forEach { (k, v) ->
+                    if (!k.equals("User-Agent", ignoreCase = true) &&
+                        !k.equals("Referer", ignoreCase = true) &&
+                        !k.equals("Origin", ignoreCase = true)
+                    ) {
+                        requestBuilder.header(k, v)
+                    }
+                }
+
+                val request = requestBuilder.build()
 
                 http.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
@@ -86,7 +144,7 @@ class DownloadRepository(context: Context) {
                                 } else {
                                     0f
                                 }
-                                if (!cache) {
+                                if (isManualFlag.get()) {
                                     _progress.update {
                                         it + (track.id to DownloadStatus.Downloading(progress, bytes, total))
                                     }
@@ -103,6 +161,9 @@ class DownloadRepository(context: Context) {
                     temp.delete()
                 }
 
+                val isManualNow = isManualFlag.get()
+                val cachedAt = if (isManualNow) 0L else (if (cache) System.currentTimeMillis() else 0L)
+
                 val storedTrack = track.copy(localPath = target.absolutePath)
                 val entry = DownloadedTrack(
                     track = storedTrack,
@@ -115,14 +176,27 @@ class DownloadRepository(context: Context) {
                     listOf(entry) + current.filterNot { it.track.id == track.id }
                 }
                 persist()
-                _progress.update { it + (track.id to DownloadStatus.Completed) }
+
+                if (isManualNow) {
+                    _progress.update { it + (track.id to DownloadStatus.Completed) }
+                    activeSuccessCallbacks.remove(track.id)?.invoke()
+                } else {
+                    _progress.update { it - track.id }
+                }
             } catch (t: Throwable) {
                 temp.delete()
-                _progress.update {
-                    it + (track.id to DownloadStatus.Failed(t.message ?: "Download failed"))
+                if (isManualFlag.get()) {
+                    val errMsg = t.message ?: "Download failed"
+                    _progress.update {
+                        it + (track.id to DownloadStatus.Failed(errMsg))
+                    }
+                    activeErrorCallbacks.remove(track.id)?.invoke(errMsg)
                 }
             } finally {
                 jobs.remove(track.id)
+                activeManualFlags.remove(track.id)
+                activeSuccessCallbacks.remove(track.id)
+                activeErrorCallbacks.remove(track.id)
             }
         }
         jobs[track.id] = job
@@ -193,13 +267,14 @@ class DownloadRepository(context: Context) {
     /** Converts a 30-day cache entry into a permanent manual offline save. */
     fun promoteToManual(trackId: String): Boolean {
         val entry = _downloads.value.firstOrNull { it.track.id == trackId } ?: return false
-        if (!File(entry.filePath).exists()) return false
+        val file = File(entry.filePath)
+        if (!file.exists() || file.length() <= 0L) return false
         _downloads.update { current ->
             current.map { item ->
                 if (item.track.id == trackId) item.copy(cachedAt = 0L) else item
             }
         }
-        _progress.update { it - trackId }
+        _progress.update { it + (trackId to DownloadStatus.Completed) }
         persist()
         return true
     }

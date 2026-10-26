@@ -311,6 +311,12 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
         }
     }
 
+    LaunchedEffect(currentUser) {
+        if (currentUser == null) {
+            snackbarHostState.currentSnackbarData?.dismiss()
+        }
+    }
+
     // App khule to net check: net connection na mile to direct offline songs list kholo
     LaunchedEffect(Unit) {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
@@ -963,6 +969,7 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
             },
             onSignOut = {
                 showProfileSheet = false
+                snackbarHostState.currentSnackbarData?.dismiss()
                 viewModel.signOut(viewModel.getGoogleSignInClient()) {}
             },
         )

@@ -1467,8 +1467,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
 
     fun signOut(googleSignInClient: GoogleSignInClient?, onComplete: () -> Unit) {
         authRepo.signOut(googleSignInClient) {
-            _messages.tryEmit("Signed out")
-            _showAuthPrompt.value = true
+            _showAuthPrompt.value = false
             onComplete()
         }
     }
@@ -1537,7 +1536,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
     fun download(track: Track) {
         val user = currentUser.value
         val entry = downloads.value.firstOrNull { it.track.id == track.id }
-        if (entry != null && !entry.isCached) {
+        if (entry != null && !entry.isCached && downloadsRepo.localPath(track.id) != null) {
             _messages.tryEmit("Already saved for offline listening")
             return
         }
@@ -1550,18 +1549,54 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
                         firestoreSync.saveOfflineTrack(user.uid, track)
                     }
                 }
+                return
+            } else {
+                downloadsRepo.delete(track.id)
             }
-            return
         }
+
+        // If an active download/cache job is running in background, promote it to manual save
+        if (downloadsRepo.isJobActive(track.id)) {
+            val promoted = downloadsRepo.promoteActiveJob(
+                trackId = track.id,
+                onSuccess = {
+                    _messages.tryEmit("Downloaded \"${track.title}\"")
+                    if (user != null && !user.isGuest) {
+                        viewModelScope.launch {
+                            firestoreSync.saveOfflineTrack(user.uid, track)
+                        }
+                    }
+                },
+                onError = { err ->
+                    _messages.tryEmit("Download failed: $err")
+                }
+            )
+            if (promoted) {
+                _messages.tryEmit("Saving \"${track.title}\" offline...")
+                return
+            }
+        }
+
         viewModelScope.launch {
             try {
                 _messages.tryEmit("Downloading \"${track.title}\"...")
                 val resolution = music.resolveAudio(track)
-                downloadsRepo.download(track, resolution)
-                if (user != null && !user.isGuest) {
-                    firestoreSync.saveOfflineTrack(user.uid, track, resolution.url)
-                }
-                _messages.tryEmit("Downloaded \"${track.title}\"")
+                downloadsRepo.download(
+                    track = track,
+                    resolution = resolution,
+                    cache = false,
+                    onSuccess = {
+                        _messages.tryEmit("Downloaded \"${track.title}\"")
+                        if (user != null && !user.isGuest) {
+                            viewModelScope.launch {
+                                firestoreSync.saveOfflineTrack(user.uid, track, resolution.url)
+                            }
+                        }
+                    },
+                    onError = { err ->
+                        _messages.tryEmit("Download failed: $err")
+                    }
+                )
             } catch (t: Throwable) {
                 _messages.tryEmit("Download failed: ${t.message}")
             }
