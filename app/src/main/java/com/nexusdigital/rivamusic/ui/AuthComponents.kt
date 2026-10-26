@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.BrightnessAuto
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudDone
@@ -72,6 +73,7 @@ import com.nexusdigital.rivamusic.data.UserProfile
 import com.nexusdigital.rivamusic.theme.BgDeep
 import com.nexusdigital.rivamusic.theme.Coral
 import com.nexusdigital.rivamusic.theme.RivaIsDark
+import com.nexusdigital.rivamusic.theme.ThemeMode
 import com.nexusdigital.rivamusic.theme.Ink
 import com.nexusdigital.rivamusic.theme.InkSoft
 import com.nexusdigital.rivamusic.theme.Lime
@@ -341,9 +343,11 @@ fun GuestNameInputDialog(
 @Composable
 fun ProfileBottomSheet(
     userProfile: UserProfile,
+    themeMode: ThemeMode = ThemeMode.SYSTEM,
     isDarkMode: Boolean = true,
     selectedRegion: MusicRegion? = null,
     selectedLanguages: Set<String> = emptySet(),
+    onSelectThemeMode: (ThemeMode) -> Unit = {},
     onToggleDarkMode: () -> Unit = {},
     onDismiss: () -> Unit,
     onGoogleSignIn: () -> Unit,
@@ -556,20 +560,25 @@ fun ProfileBottomSheet(
                 Spacer(Modifier.height(12.dp))
             }
 
-            // Appearance Settings: Dark Mode Toggle
-            Row(
+            // Appearance Settings: 3 Options (System Default, Light, Dark)
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
                     .background(PanelElevated)
                     .border(1.dp, PanelBorder, RoundedCornerShape(16.dp))
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+                    .padding(14.dp),
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(bottom = 12.dp),
+                ) {
                     Icon(
-                        imageVector = if (isDarkMode) Icons.Rounded.DarkMode else Icons.Rounded.LightMode,
+                        imageVector = when (themeMode) {
+                            ThemeMode.SYSTEM -> Icons.Rounded.BrightnessAuto
+                            ThemeMode.LIGHT -> Icons.Rounded.LightMode
+                            ThemeMode.DARK -> Icons.Rounded.DarkMode
+                        },
                         contentDescription = null,
                         tint = Lime,
                         modifier = Modifier.size(22.dp),
@@ -577,28 +586,66 @@ fun ProfileBottomSheet(
                     Spacer(Modifier.width(14.dp))
                     Column {
                         Text(
-                            text = "Appearance",
+                            text = "Appearance Theme",
                             style = MaterialTheme.typography.bodyMedium,
                             color = TextPrimary,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
-                            text = if (isDarkMode) "Dark Theme" else "Light Theme",
+                            text = when (themeMode) {
+                                ThemeMode.SYSTEM -> "System default (Auto)"
+                                ThemeMode.LIGHT -> "Light Theme"
+                                ThemeMode.DARK -> "Dark Theme"
+                            },
                             style = MaterialTheme.typography.labelSmall,
                             color = TextSecondary,
                         )
                     }
                 }
-                Switch(
-                    checked = isDarkMode,
-                    onCheckedChange = { onToggleDarkMode() },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Ink,
-                        checkedTrackColor = Lime,
-                        uncheckedThumbColor = TextFaint,
-                        uncheckedTrackColor = Panel,
-                    ),
-                )
+
+                // 3 Options Segmented Selector
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (RivaIsDark) Color.White.copy(alpha = 0.05f) else Panel)
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    val options = listOf(
+                        Triple(ThemeMode.SYSTEM, "System", Icons.Rounded.BrightnessAuto),
+                        Triple(ThemeMode.LIGHT, "Light", Icons.Rounded.LightMode),
+                        Triple(ThemeMode.DARK, "Dark", Icons.Rounded.DarkMode),
+                    )
+
+                    options.forEach { (mode, label, icon) ->
+                        val isSelected = themeMode == mode
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (isSelected) Lime else Color.Transparent)
+                                .clickable { onSelectThemeMode(mode) }
+                                .padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = icon,
+                                contentDescription = label,
+                                tint = if (isSelected) Ink else TextSecondary,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Spacer(Modifier.width(5.dp))
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (isSelected) Ink else TextSecondary,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                            )
+                        }
+                    }
+                }
             }
 
             Spacer(Modifier.height(12.dp))
@@ -631,10 +678,17 @@ fun ProfileBottomSheet(
                         color = TextPrimary,
                         fontWeight = FontWeight.SemiBold,
                     )
-                    val langDesc = if (selectedLanguages.isNotEmpty() && selectedRegion != null) {
-                        "${selectedRegion.flag} ${selectedRegion.name} • ${selectedLanguages.joinToString(", ")}"
-                    } else if (selectedLanguages.isNotEmpty()) {
-                        selectedLanguages.joinToString(", ")
+                    val orderedLangs = if (selectedLanguages.any { it.equals("Hindi", ignoreCase = true) }) {
+                        val hindi = selectedLanguages.first { it.equals("Hindi", ignoreCase = true) }
+                        val rest = selectedLanguages.filterNot { it.equals("Hindi", ignoreCase = true) }
+                        listOf(hindi) + rest
+                    } else {
+                        selectedLanguages.toList()
+                    }
+                    val langDesc = if (orderedLangs.isNotEmpty() && selectedRegion != null) {
+                        "${selectedRegion.flag} ${selectedRegion.name} • ${orderedLangs.joinToString(", ")}"
+                    } else if (orderedLangs.isNotEmpty()) {
+                        orderedLangs.joinToString(", ")
                     } else {
                         "Customize trending songs & home recommendations"
                     }

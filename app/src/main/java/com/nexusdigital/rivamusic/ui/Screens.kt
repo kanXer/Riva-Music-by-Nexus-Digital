@@ -131,7 +131,14 @@ fun HomeScreen(
         }
         item {
             val defaultMoods = listOf("Lo-Fi", "Pop", "Chill", "Workout", "Party")
-            val displayChips = (selectedLanguages.toList() + defaultMoods).distinct()
+            val orderedLangs = if (selectedLanguages.any { it.equals("Hindi", ignoreCase = true) }) {
+                val hindi = selectedLanguages.first { it.equals("Hindi", ignoreCase = true) }
+                val rest = selectedLanguages.filterNot { it.equals("Hindi", ignoreCase = true) }
+                listOf(hindi) + rest
+            } else {
+                selectedLanguages.toList()
+            }
+            val displayChips = (orderedLangs + defaultMoods).distinct()
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 20.dp),
                 horizontalArrangement = Arrangement.spacedBy(9.dp),
@@ -242,7 +249,7 @@ private fun HomeHeader(
                 Spacer(Modifier.width(10.dp))
                 Column {
                     Text(
-                        text = "Riva",
+                        text = "Riva Music",
                         style = MaterialTheme.typography.titleLarge,
                         color = TextPrimary,
                         fontWeight = FontWeight.Black,
@@ -258,42 +265,11 @@ private fun HomeHeader(
                 }
             }
 
-            // Right Actions: Region Pill, Search Button, Refresh Button, Profile Avatar
+            // Right Actions: Search Button, Refresh Button, Profile Avatar
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                // Region Pill
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(PanelElevated)
-                        .border(1.dp, PanelBorder, RoundedCornerShape(20.dp))
-                        .clickable(onClick = onOpenLanguages)
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = selectedRegion.flag,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        text = selectedRegion.name,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextPrimary,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                    )
-                    Spacer(Modifier.width(2.dp))
-                    Icon(
-                        Icons.Rounded.KeyboardArrowDown,
-                        contentDescription = "Change region",
-                        tint = TextFaint,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-
                 // Search Icon Button
                 Box(
                     modifier = Modifier
@@ -600,7 +576,7 @@ private fun LegacySearchScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 20.dp),
-                placeholder = { Text("Search Riva...", color = TextFaint) },
+                placeholder = { Text("Search Riva Music...", color = TextFaint) },
                 leadingIcon = {
                     Icon(Icons.Rounded.Search, contentDescription = null, tint = Lime)
                 },

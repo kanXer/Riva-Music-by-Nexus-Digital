@@ -178,8 +178,20 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
     )
     val selectedRegion: StateFlow<MusicRegion> = _selectedRegion.asStateFlow()
 
+    private fun orderLanguages(languages: Set<String>): Set<String> {
+        if (languages.isEmpty()) return setOf("Hindi")
+        val hasHindi = languages.any { it.equals("Hindi", ignoreCase = true) }
+        return if (hasHindi) {
+            val hindi = languages.first { it.equals("Hindi", ignoreCase = true) }
+            val rest = languages.filterNot { it.equals("Hindi", ignoreCase = true) }
+            linkedSetOf(hindi).apply { addAll(rest) }
+        } else {
+            LinkedHashSet(languages)
+        }
+    }
+
     private val _selectedLanguages = MutableStateFlow<Set<String>>(
-        homePrefs.getStringSet(KEY_SELECTED_LANGUAGES, null) ?: setOf("Hindi")
+        orderLanguages(homePrefs.getStringSet(KEY_SELECTED_LANGUAGES, null) ?: setOf("Hindi"))
     )
     val selectedLanguages: StateFlow<Set<String>> = _selectedLanguages.asStateFlow()
 
@@ -194,21 +206,33 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
     private val _sleepRemainingSeconds = MutableStateFlow(0L)
     val sleepRemainingSeconds: StateFlow<Long> = _sleepRemainingSeconds.asStateFlow()
 
-    private val _isDarkMode = MutableStateFlow(
-        homePrefs.getBoolean("is_dark_mode", false)
+    private val _themeMode = MutableStateFlow<com.nexusdigital.rivamusic.theme.ThemeMode>(
+        run {
+            val saved = homePrefs.getString("app_theme_mode", null)
+            when (saved) {
+                "LIGHT" -> com.nexusdigital.rivamusic.theme.ThemeMode.LIGHT
+                "DARK" -> com.nexusdigital.rivamusic.theme.ThemeMode.DARK
+                else -> com.nexusdigital.rivamusic.theme.ThemeMode.SYSTEM
+            }
+        }
     )
-    val isDarkMode: StateFlow<Boolean> = _isDarkMode.asStateFlow()
+    val themeMode: StateFlow<com.nexusdigital.rivamusic.theme.ThemeMode> = _themeMode.asStateFlow()
 
-    fun toggleDarkMode() {
-        val next = !_isDarkMode.value
-        _isDarkMode.value = next
-        homePrefs.edit().putBoolean("is_dark_mode", next).apply()
+    fun setThemeMode(mode: com.nexusdigital.rivamusic.theme.ThemeMode) {
+        _themeMode.value = mode
+        homePrefs.edit().putString("app_theme_mode", mode.name).apply()
     }
 
-    fun setDarkMode(dark: Boolean) {
-        _isDarkMode.value = dark
-        homePrefs.edit().putBoolean("is_dark_mode", dark).apply()
+    fun cycleThemeMode() {
+        val next = when (_themeMode.value) {
+            com.nexusdigital.rivamusic.theme.ThemeMode.SYSTEM -> com.nexusdigital.rivamusic.theme.ThemeMode.LIGHT
+            com.nexusdigital.rivamusic.theme.ThemeMode.LIGHT -> com.nexusdigital.rivamusic.theme.ThemeMode.DARK
+            com.nexusdigital.rivamusic.theme.ThemeMode.DARK -> com.nexusdigital.rivamusic.theme.ThemeMode.SYSTEM
+        }
+        setThemeMode(next)
     }
+
+    fun toggleDarkMode() = cycleThemeMode()
 
     private val _similarTracks = MutableStateFlow<List<Track>>(emptyList())
     val similarTracks: StateFlow<List<Track>> = _similarTracks.asStateFlow()
@@ -308,7 +332,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
         if (_isLoadingHome.value && !force) return
         viewModelScope.launch {
             _isLoadingHome.value = true
-            val chosen = _selectedLanguages.value.ifEmpty { setOf("Hindi") }
+            val chosen = orderLanguages(_selectedLanguages.value.ifEmpty { setOf("Hindi") })
             val region = _selectedRegion.value
             val primaryLang = chosen.firstOrNull() ?: "Hindi"
             val specs = mutableListOf<HomeSectionSpec>()
@@ -457,7 +481,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun updatePreferences(region: MusicRegion, languages: Set<String>) {
-        val chosen = languages.ifEmpty { setOf("Hindi") }
+        val chosen = orderLanguages(languages)
         _selectedRegion.value = region
         _selectedLanguages.value = chosen
         music.setRegion(region.code)
@@ -1457,7 +1481,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
             if (remote != null) {
                 val (regionCode, remoteLangs) = remote
                 val matchingRegion = AVAILABLE_REGIONS.firstOrNull { it.code == regionCode } ?: _selectedRegion.value
-                val validLangs = remoteLangs.ifEmpty { setOf("Hindi") }
+                val validLangs = orderLanguages(remoteLangs.ifEmpty { setOf("Hindi") })
                 _selectedRegion.value = matchingRegion
                 _selectedLanguages.value = validLangs
                 music.setRegion(matchingRegion.code)

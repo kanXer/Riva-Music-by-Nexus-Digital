@@ -195,7 +195,13 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
     val lyricsNow by viewModel.lyrics.collectAsStateWithLifecycle()
     val currentUser by viewModel.currentUser.collectAsStateWithLifecycle()
     val showAuthPrompt by viewModel.showAuthPrompt.collectAsStateWithLifecycle()
-    val isDarkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
+    val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+    val isSystemDark = androidx.compose.foundation.isSystemInDarkTheme()
+    val isDarkMode = when (themeMode) {
+        com.nexusdigital.rivamusic.theme.ThemeMode.SYSTEM -> isSystemDark
+        com.nexusdigital.rivamusic.theme.ThemeMode.LIGHT -> false
+        com.nexusdigital.rivamusic.theme.ThemeMode.DARK -> true
+    }
     val similarTracks by viewModel.similarTracks.collectAsStateWithLifecycle()
     val isLoadingSimilar by viewModel.isLoadingSimilar.collectAsStateWithLifecycle()
     var showSimilarSheet by rememberSaveable { mutableStateOf(false) }
@@ -941,10 +947,12 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
     if (showProfileSheet && currentUser != null) {
         ProfileBottomSheet(
             userProfile = currentUser!!,
+            themeMode = themeMode,
             isDarkMode = isDarkMode,
             selectedRegion = selectedRegion,
             selectedLanguages = selectedLanguages,
-            onToggleDarkMode = viewModel::toggleDarkMode,
+            onSelectThemeMode = viewModel::setThemeMode,
+            onToggleDarkMode = viewModel::cycleThemeMode,
             onDismiss = { showProfileSheet = false },
             onGoogleSignIn = {
                 showProfileSheet = false

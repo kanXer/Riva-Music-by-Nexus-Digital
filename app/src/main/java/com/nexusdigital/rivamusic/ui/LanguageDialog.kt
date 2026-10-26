@@ -315,7 +315,16 @@ fun LanguageSelectionDialog(
                     }
 
                     Button(
-                        onClick = { onSave(selectedRegion, selectedLanguages) },
+                        onClick = {
+                            val ordered = if (selectedLanguages.any { it.equals("Hindi", ignoreCase = true) }) {
+                                val hindi = selectedLanguages.first { it.equals("Hindi", ignoreCase = true) }
+                                val rest = selectedLanguages.filterNot { it.equals("Hindi", ignoreCase = true) }
+                                linkedSetOf(hindi).apply { addAll(rest) }
+                            } else {
+                                selectedLanguages
+                            }
+                            onSave(selectedRegion, ordered)
+                        },
                         modifier = Modifier.weight(1.5f),
                         enabled = selectedLanguages.isNotEmpty(),
                         colors = ButtonDefaults.buttonColors(

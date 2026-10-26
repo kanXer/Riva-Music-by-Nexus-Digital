@@ -220,7 +220,7 @@ fun SearchScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 20.dp),
-                placeholder = { Text("Search Riva...", color = TextFaint) },
+                placeholder = { Text("Search Riva Music...", color = TextFaint) },
                 leadingIcon = {
                     Icon(Icons.Rounded.Search, contentDescription = null, tint = Lime)
                 },
