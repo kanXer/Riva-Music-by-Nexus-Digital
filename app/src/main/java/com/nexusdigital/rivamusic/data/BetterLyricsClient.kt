@@ -37,6 +37,12 @@ class BetterLyricsClient(
                 attempts += buildUrl(cleanTitle, cleanArtist, durationSeconds)
             }
             attempts += buildUrl(cleanTitle, cleanArtist, null)
+            if (cleanTitle != title.trim() || cleanArtist != artist.trim()) {
+                if (durationSeconds > 0) {
+                    attempts += buildUrl(title.trim(), artist.trim(), durationSeconds)
+                }
+                attempts += buildUrl(title.trim(), artist.trim(), null)
+            }
 
             for (url in attempts) {
                 try {

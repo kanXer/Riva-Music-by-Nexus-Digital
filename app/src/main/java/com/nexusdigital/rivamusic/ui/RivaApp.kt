@@ -17,6 +17,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInRoot
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.common.api.ApiException
+import android.content.Intent
 import com.nexusdigital.rivamusic.data.UserProfile
 
 import androidx.compose.animation.AnimatedVisibility
@@ -71,6 +72,7 @@ import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.RepeatOne
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
@@ -1438,7 +1440,7 @@ private fun PlayerSheet(
                                 .clip(CircleShape)
                                 .background(if (RivaIsDark) Color.White.copy(alpha = 0.06f) else PanelElevated)
                                 .border(1.dp, if (RivaIsDark) Color.White.copy(alpha = 0.12f) else PanelBorder, CircleShape)
-                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                                .padding(horizontal = 4.dp, vertical = 4.dp),
                             horizontalArrangement = Arrangement.SpaceEvenly,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -1448,8 +1450,8 @@ private fun PlayerSheet(
                                 contentDescription = "50 Similar Tracks",
                                 onClick = { onOpenSimilarTracks(pageTrack) },
                                 badgeText = "50",
-                                size = 38.dp,
-                                iconSize = 19.dp,
+                                size = 36.dp,
+                                iconSize = 18.dp,
                                 tint = Lime,
                             )
 
@@ -1460,8 +1462,27 @@ private fun PlayerSheet(
                                 contentDescription = if (isLiked) "Unlike" else "Like",
                                 onClick = { onToggleLike(pageTrack) },
                                 tint = if (isLiked) Coral else TextPrimary,
-                                size = 38.dp,
-                                iconSize = 19.dp,
+                                size = 36.dp,
+                                iconSize = 18.dp,
+                            )
+
+                            // Share Button
+                            AppleGlassButton(
+                                icon = Icons.Rounded.Share,
+                                contentDescription = "Share song",
+                                onClick = {
+                                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(Intent.EXTRA_SUBJECT, "${pageTrack.title} - ${pageTrack.artist}")
+                                        putExtra(
+                                            Intent.EXTRA_TEXT,
+                                            "Listen to \"${pageTrack.title}\" by ${pageTrack.artist} on Riva Music / YouTube Music:\nhttps://music.youtube.com/watch?v=${pageTrack.id}"
+                                        )
+                                    }
+                                    context.startActivity(Intent.createChooser(shareIntent, "Share \"${pageTrack.title}\" via"))
+                                },
+                                size = 36.dp,
+                                iconSize = 18.dp,
                             )
 
                             // Download Button
@@ -1477,8 +1498,8 @@ private fun PlayerSheet(
                                 icon = Icons.AutoMirrored.Rounded.PlaylistAdd,
                                 contentDescription = "Add to playlist",
                                 onClick = onAddToPlaylist,
-                                size = 38.dp,
-                                iconSize = 19.dp,
+                                size = 36.dp,
+                                iconSize = 18.dp,
                             )
 
                             // Appearance Toggle (Dark/Light mode)
@@ -1486,8 +1507,8 @@ private fun PlayerSheet(
                                 icon = if (isDarkMode) Icons.Rounded.LightMode else Icons.Rounded.DarkMode,
                                 contentDescription = "Toggle Appearance",
                                 onClick = onToggleDarkMode,
-                                size = 38.dp,
-                                iconSize = 19.dp,
+                                size = 36.dp,
+                                iconSize = 18.dp,
                             )
 
                             // Fullscreen Button
@@ -1495,8 +1516,8 @@ private fun PlayerSheet(
                                 icon = Icons.Rounded.Fullscreen,
                                 contentDescription = "Fullscreen",
                                 onClick = onOpenFullScreen,
-                                size = 38.dp,
-                                iconSize = 20.dp,
+                                size = 36.dp,
+                                iconSize = 19.dp,
                             )
                         }
 

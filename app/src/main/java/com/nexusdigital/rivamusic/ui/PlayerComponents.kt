@@ -1,6 +1,9 @@
 package com.nexusdigital.rivamusic.ui
 
+import android.content.Intent
 import android.graphics.PointF
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -417,180 +420,45 @@ fun VinylDiskPlayer(
 }
 
 /**
- * The iconic "Bombastic Side-Eye Dog" meme illustration rendered in Compose.
- * Displayed when lyrics are unavailable for a song.
+ * Clean & elegant fallback displayed when lyrics are unavailable for a song.
  */
 @Composable
-fun SideEyeDogMeme(modifier: Modifier = Modifier) {
+fun NoLyricsAvailableView(modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(16.dp),
+            .padding(horizontal = 24.dp, vertical = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
         Box(
             modifier = Modifier
-                .size(140.dp)
-                .clip(CircleShape)
-                .background(
-                    Brush.radialGradient(
-                        if (RivaIsDark) listOf(Color(0xFF2C1E1B), Color(0xFF180D0C))
-                        else listOf(Color(0xFFFFE8DF), Color(0xFFF3D5CA)),
-                    ),
-                )
-                .border(1.5.dp, if (RivaIsDark) Color.White.copy(alpha = 0.15f) else PanelBorder, CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Canvas(modifier = Modifier.size(120.dp)) {
-                val cx = size.width / 2f
-                val cy = size.height / 2f
-
-                // Left & Right Floppy Ears
-                val leftEar = Path().apply {
-                    moveTo(cx - 38.dp.toPx(), cy - 20.dp.toPx())
-                    quadraticTo(
-                        cx - 55.dp.toPx(), cy - 45.dp.toPx(),
-                        cx - 28.dp.toPx(), cy - 35.dp.toPx(),
-                    )
-                    close()
-                }
-                drawPath(leftEar, color = Color(0xFFC48B57))
-
-                val rightEar = Path().apply {
-                    moveTo(cx + 38.dp.toPx(), cy - 20.dp.toPx())
-                    quadraticTo(
-                        cx + 55.dp.toPx(), cy - 45.dp.toPx(),
-                        cx + 28.dp.toPx(), cy - 35.dp.toPx(),
-                    )
-                    close()
-                }
-                drawPath(rightEar, color = Color(0xFFC48B57))
-
-                // Dog Head Oval
-                drawOval(
-                    color = Color(0xFFE5A86F),
-                    topLeft = Offset(cx - 42.dp.toPx(), cy - 38.dp.toPx()),
-                    size = androidx.compose.ui.geometry.Size(84.dp.toPx(), 76.dp.toPx()),
-                )
-
-                // Dog Muzzle
-                drawOval(
-                    color = Color(0xFFF7D2A7),
-                    topLeft = Offset(cx - 24.dp.toPx(), cy - 6.dp.toPx()),
-                    size = androidx.compose.ui.geometry.Size(48.dp.toPx(), 40.dp.toPx()),
-                )
-
-                // Dog Black Button Nose
-                drawOval(
-                    color = Color(0xFF201615),
-                    topLeft = Offset(cx - 9.dp.toPx(), cy),
-                    size = androidx.compose.ui.geometry.Size(18.dp.toPx(), 13.dp.toPx()),
-                )
-
-                // Subtle Muzzle line & smirk
-                drawLine(
-                    color = Color(0xFF201615),
-                    start = Offset(cx, cy + 13.dp.toPx()),
-                    end = Offset(cx, cy + 22.dp.toPx()),
-                    strokeWidth = 2.dp.toPx(),
-                    cap = StrokeCap.Round,
-                )
-                drawLine(
-                    color = Color(0xFF201615),
-                    start = Offset(cx - 10.dp.toPx(), cy + 22.dp.toPx()),
-                    end = Offset(cx + 10.dp.toPx(), cy + 20.dp.toPx()),
-                    strokeWidth = 2.dp.toPx(),
-                    cap = StrokeCap.Round,
-                )
-
-                // === THE BOMBASTIC SIDE-EYES ===
-                // Left Sclera (White eye background)
-                drawOval(
-                    color = Color.White,
-                    topLeft = Offset(cx - 30.dp.toPx(), cy - 22.dp.toPx()),
-                    size = androidx.compose.ui.geometry.Size(22.dp.toPx(), 19.dp.toPx()),
-                )
-                // Left Pupil shifted HARD RIGHT (Looking sideways at you!)
-                drawCircle(
-                    color = Color(0xFF1E1410),
-                    radius = 6.dp.toPx(),
-                    center = Offset(cx - 13.dp.toPx(), cy - 12.dp.toPx()),
-                )
-                drawCircle(
-                    color = Color.White,
-                    radius = 2.dp.toPx(),
-                    center = Offset(cx - 12.dp.toPx(), cy - 14.dp.toPx()),
-                )
-
-                // Right Sclera (White eye background)
-                drawOval(
-                    color = Color.White,
-                    topLeft = Offset(cx + 8.dp.toPx(), cy - 22.dp.toPx()),
-                    size = androidx.compose.ui.geometry.Size(22.dp.toPx(), 19.dp.toPx()),
-                )
-                // Right Pupil shifted HARD RIGHT (Side-eye!)
-                drawCircle(
-                    color = Color(0xFF1E1410),
-                    radius = 6.dp.toPx(),
-                    center = Offset(cx + 25.dp.toPx(), cy - 12.dp.toPx()),
-                )
-                drawCircle(
-                    color = Color.White,
-                    radius = 2.dp.toPx(),
-                    center = Offset(cx + 26.dp.toPx(), cy - 14.dp.toPx()),
-                )
-
-                // Skeptical arched eyebrows (The classic suspicious dog brow)
-                val leftBrow = Path().apply {
-                    moveTo(cx - 32.dp.toPx(), cy - 26.dp.toPx())
-                    quadraticTo(
-                        cx - 20.dp.toPx(), cy - 32.dp.toPx(),
-                        cx - 8.dp.toPx(), cy - 26.dp.toPx(),
-                    )
-                }
-                drawPath(leftBrow, color = Color(0xFF704323), style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round))
-
-                val rightBrow = Path().apply {
-                    moveTo(cx + 6.dp.toPx(), cy - 26.dp.toPx())
-                    quadraticTo(
-                        cx + 18.dp.toPx(), cy - 34.dp.toPx(),
-                        cx + 32.dp.toPx(), cy - 27.dp.toPx(),
-                    )
-                }
-                drawPath(rightBrow, color = Color(0xFF704323), style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round))
-            }
-        }
-
-        Spacer(Modifier.height(14.dp))
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center,
-            modifier = Modifier
+                .size(72.dp)
                 .clip(CircleShape)
                 .background(if (RivaIsDark) Color.White.copy(alpha = 0.08f) else PanelElevated)
-                .border(1.dp, if (RivaIsDark) Color.White.copy(alpha = 0.12f) else PanelBorder, CircleShape)
-                .padding(horizontal = 12.dp, vertical = 6.dp),
+                .border(1.dp, if (RivaIsDark) Color.White.copy(alpha = 0.14f) else PanelBorder, CircleShape),
+            contentAlignment = Alignment.Center,
         ) {
-            Text(
-                text = "Bombastic Side Eye 👀",
-                style = MaterialTheme.typography.labelMedium,
-                color = Lime,
-                fontWeight = FontWeight.Bold,
+            Icon(
+                imageVector = Icons.Rounded.GraphicEq,
+                contentDescription = null,
+                tint = Lime,
+                modifier = Modifier.size(36.dp),
             )
         }
-        Spacer(Modifier.height(8.dp))
+
+        Spacer(Modifier.height(18.dp))
         Text(
-            text = "No lyrics found for this track",
-            style = MaterialTheme.typography.bodyLarge,
+            text = "No Lyrics Available",
+            style = MaterialTheme.typography.titleMedium,
             color = TextPrimary,
-            fontWeight = FontWeight.SemiBold,
+            fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
         )
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
         Text(
-            text = "Just close your eyes and feel the rhythm & vibe!",
-            style = MaterialTheme.typography.bodySmall,
+            text = "Enjoy the music, feel the rhythm & vibe",
+            style = MaterialTheme.typography.bodyMedium,
             color = TextSecondary,
             textAlign = TextAlign.Center,
         )
@@ -884,13 +752,13 @@ fun SyncedLyricsView(
             CircularProgressIndicator(color = Lime, strokeWidth = 3.dp)
             Spacer(Modifier.height(14.dp))
             Text(
-                text = "Searching realtime lyrics from LRCLIB & BetterLyrics...",
+                text = "Searching realtime lyrics from BetterLyrics...",
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextSecondary,
             )
         }
     } else if (lyrics.failed || (!lyrics.synced && lyrics.lines.isEmpty())) {
-        SideEyeDogMeme(modifier = modifier)
+        NoLyricsAvailableView(modifier = modifier)
     } else if (lyrics.synced && lyrics.syncedLines.isNotEmpty()) {
         val listState = rememberLazyListState()
         var manualOffsetMs by remember(lyrics) { mutableLongStateOf(0L) }
@@ -1034,6 +902,7 @@ fun FullScreenPlayerOverlay(
     onDismiss: () -> Unit,
 ) {
     var showLyrics by remember { mutableStateOf(false) }
+    val context = LocalContext.current
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -1124,13 +993,36 @@ fun FullScreenPlayerOverlay(
                         )
                     }
 
-                    AppleGlassButton(
-                        icon = Icons.Rounded.FullscreenExit,
-                        contentDescription = "Exit Fullscreen",
-                        onClick = onDismiss,
-                        size = 40.dp,
-                        iconSize = 22.dp,
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        AppleGlassButton(
+                            icon = Icons.Rounded.Share,
+                            contentDescription = "Share",
+                            onClick = {
+                                val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_SUBJECT, "${track.title} - ${track.artist}")
+                                    putExtra(
+                                        Intent.EXTRA_TEXT,
+                                        "Listen to \"${track.title}\" by ${track.artist} on Riva Music / YouTube Music:\nhttps://music.youtube.com/watch?v=${track.id}"
+                                    )
+                                }
+                                context.startActivity(Intent.createChooser(sendIntent, "Share \"${track.title}\" via"))
+                            },
+                            size = 40.dp,
+                            iconSize = 20.dp,
+                        )
+
+                        AppleGlassButton(
+                            icon = Icons.Rounded.FullscreenExit,
+                            contentDescription = "Exit Fullscreen",
+                            onClick = onDismiss,
+                            size = 40.dp,
+                            iconSize = 22.dp,
+                        )
+                    }
                 }
 
                 // Center Content: Vinyl Disk & Title OR Realtime Synced Lyrics
