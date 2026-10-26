@@ -18,6 +18,7 @@ import androidx.compose.ui.layout.boundsInRoot
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.common.api.ApiException
 import android.content.Intent
+import androidx.compose.ui.draw.clipToBounds
 import com.nexusdigital.rivamusic.data.UserProfile
 
 import androidx.compose.animation.AnimatedVisibility
@@ -1293,8 +1294,8 @@ private fun PlayerSheet(
                     modifier = Modifier.fillMaxSize(),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    // Equal gap above disk from top bar
-                    Spacer(Modifier.weight(1f))
+                    // Equal gap above disk from top bar (shrinks in lyrics mode to give full height)
+                    Spacer(Modifier.weight(if (showLyrics) 0.15f else 1f))
 
                     // Center Content: Vinyl Disk OR Realtime Synced Lyrics
                     AnimatedContent(
@@ -1306,9 +1307,13 @@ private fun PlayerSheet(
                         },
                         label = "DiskLyricsToggle",
                         modifier = Modifier
-                            .weight(8f, fill = false)
-                            .fillMaxWidth(0.85f)
-                            .aspectRatio(1f, matchHeightConstraintsFirst = true)
+                            .weight(if (showLyrics) 12f else 8f, fill = false)
+                            .fillMaxWidth(if (showLyrics) 0.95f else 0.85f)
+                            .then(
+                                if (!showLyrics) Modifier.aspectRatio(1f, matchHeightConstraintsFirst = true)
+                                else Modifier
+                            )
+                            .clipToBounds()
                             .onGloballyPositioned { coordinates ->
                                 thumbnailBounds = coordinates.boundsInRoot()
                             },
@@ -1339,6 +1344,7 @@ private fun PlayerSheet(
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .clip(RoundedCornerShape(24.dp))
+                                    .clipToBounds()
                                     .background(if (RivaIsDark) Color.White.copy(alpha = 0.05f) else PanelElevated)
                                     .border(1.dp, if (RivaIsDark) Color.White.copy(alpha = 0.12f) else PanelBorder, RoundedCornerShape(24.dp))
                                     .padding(horizontal = 14.dp, vertical = 10.dp),
@@ -1390,7 +1396,8 @@ private fun PlayerSheet(
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .weight(1f),
+                                        .weight(1f)
+                                        .clipToBounds(),
                                     contentAlignment = Alignment.Center,
                                 ) {
                                     SyncedLyricsView(
@@ -1406,8 +1413,8 @@ private fun PlayerSheet(
                         }
                     }
 
-                    // Equal gap below disk to bottom components
-                    Spacer(Modifier.weight(1f))
+                    // Equal gap below disk to bottom components (shrinks in lyrics mode)
+                    Spacer(Modifier.weight(if (showLyrics) 0.15f else 1f))
 
                     // Below Disk: Title, Gap, Singer, Actions, Mode Controls, Slider, Transport
                     Column(

@@ -3,6 +3,8 @@ package com.nexusdigital.rivamusic.ui
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.layout.BoxWithConstraints
 import kotlinx.coroutines.delay
 import android.content.Intent
@@ -782,16 +784,38 @@ fun SyncedLyricsView(
             }
         }
 
+        // Exact Y-axis center tracking: keeps currently singing line dead in the vertical center of the card
         LaunchedEffect(activeIndex, userIsScrolling) {
             if (activeIndex >= 0 && !userIsScrolling) {
-                listState.animateScrollToItem(activeIndex, scrollOffset = 0)
+                var visibleItem = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == activeIndex }
+                if (visibleItem == null) {
+                    listState.scrollToItem(activeIndex)
+                    delay(30L)
+                    visibleItem = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == activeIndex }
+                }
+                if (visibleItem != null) {
+                    val layoutInfo = listState.layoutInfo
+                    val viewportHeight = layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset
+                    if (viewportHeight > 0) {
+                        val viewportCenterY = viewportHeight / 2
+                        val itemCenterY = visibleItem.offset + visibleItem.size / 2
+                        val scrollDelta = itemCenterY - viewportCenterY
+                        if (kotlin.math.abs(scrollDelta) > 2) {
+                            listState.animateScrollBy(scrollDelta.toFloat())
+                        }
+                    }
+                }
             }
         }
 
-        BoxWithConstraints(modifier = modifier) {
-            val centerPadding = (maxHeight / 2 - 28.dp).coerceAtLeast(16.dp)
+        BoxWithConstraints(modifier = modifier.clipToBounds()) {
+            val centerPad = (maxHeight * 0.35f).coerceIn(80.dp, 160.dp)
 
-            Column(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clipToBounds(),
+            ) {
                 // Header badge + fine tune timing
                 Row(
                     modifier = Modifier
@@ -855,8 +879,9 @@ fun SyncedLyricsView(
                     state = listState,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f),
-                    contentPadding = PaddingValues(top = centerPadding, bottom = centerPadding),
+                        .weight(1f)
+                        .clipToBounds(),
+                    contentPadding = PaddingValues(top = centerPad, bottom = centerPad),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     itemsIndexed(
@@ -894,7 +919,7 @@ private fun LyricLineRow(
     onRestrictedAction: (String) -> Unit,
 ) {
     val scale by animateFloatAsState(
-        targetValue = if (isActive) 1.08f else 0.96f,
+        targetValue = if (isActive) 1.06f else 0.96f,
         animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
         label = "LyricScale",
     )
@@ -902,7 +927,7 @@ private fun LyricLineRow(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = if (isActive) 5.dp else 3.dp)
+            .padding(horizontal = 8.dp, vertical = if (isActive) 4.dp else 2.dp)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
@@ -926,7 +951,7 @@ private fun LyricLineRow(
                     onRestrictedAction("Sign in with Google to jump to lyric lines! 🔒")
                 }
             }
-            .padding(horizontal = 14.dp, vertical = if (isActive) 10.dp else 6.dp),
+            .padding(horizontal = 12.dp, vertical = if (isActive) 8.dp else 5.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
