@@ -388,16 +388,6 @@ fun LibraryScreen(
         when (section) {
             LibrarySection.ALL -> {
                 item {
-                    LibraryStorageCard(
-                        offlineCount = downloads.size,
-                        offlineBytes = downloads.sumOf { it.sizeBytes },
-                        cachedCount = cachedTracks.size,
-                        cachedBytes = cachedBytes,
-                        activeCount = activeDownloads,
-                    )
-                }
-
-                item {
                     LikedSongsHero(
                         count = liked.size,
                         coverUrl = liked.firstOrNull()?.track?.thumbnailUrl,
@@ -654,6 +644,19 @@ fun LibraryScreen(
                         )
                     }
                 }
+
+                // Storage usage summary moved to BOTTOM of library screen
+                item {
+                    Spacer(Modifier.height(8.dp))
+                    LibraryStorageCard(
+                        offlineCount = downloads.size,
+                        offlineBytes = downloads.sumOf { it.sizeBytes },
+                        cachedCount = cachedTracks.size,
+                        cachedBytes = cachedBytes,
+                        activeCount = activeDownloads,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                }
             }
 
             LibrarySection.LIKED -> {
@@ -858,15 +861,6 @@ fun LibraryScreen(
             }
 
             LibrarySection.DOWNLOADED -> {
-                item {
-                    LibraryStorageCard(
-                        offlineCount = downloads.size,
-                        offlineBytes = downloads.sumOf { it.sizeBytes },
-                        cachedCount = cachedTracks.size,
-                        cachedBytes = cachedBytes,
-                        activeCount = activeDownloads,
-                    )
-                }
                 if (filteredDownloads.isEmpty()) {
                     item {
                         EmptyState(
@@ -904,6 +898,18 @@ fun LibraryScreen(
                             onDelete = { onDeleteDownload(download.track.id) },
                         )
                     }
+                }
+
+                item {
+                    Spacer(Modifier.height(8.dp))
+                    LibraryStorageCard(
+                        offlineCount = downloads.size,
+                        offlineBytes = downloads.sumOf { it.sizeBytes },
+                        cachedCount = cachedTracks.size,
+                        cachedBytes = cachedBytes,
+                        activeCount = activeDownloads,
+                    )
+                    Spacer(Modifier.height(16.dp))
                 }
             }
         }

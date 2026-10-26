@@ -152,6 +152,22 @@ class DownloadRepository(context: Context) {
         download(track, resolution, cache = true)
     }
 
+    /**
+     * Resolves and caches a track (e.g. from Recently Played) in the background.
+     */
+    fun cacheTrackIfNeeded(track: Track, music: MusicRepository) {
+        if (isDownloaded(track.id)) return
+        if (jobs[track.id]?.isActive == true) return
+        scope.launch(Dispatchers.IO) {
+            try {
+                val resolution = music.resolveAudio(track)
+                download(track, resolution, cache = true)
+            } catch (e: Exception) {
+                android.util.Log.w("RivaCache", "Failed to cache track ${track.title}: ${e.message}")
+            }
+        }
+    }
+
     fun touchCached(trackId: String) {
         _downloads.update { current ->
             current.map { entry ->

@@ -32,6 +32,7 @@ import com.nexusdigital.rivamusic.playback.PlayerConnection
 import com.nexusdigital.rivamusic.playback.PlayerUiState
 import com.nexusdigital.rivamusic.ui.AVAILABLE_REGIONS
 import com.nexusdigital.rivamusic.ui.MusicRegion
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -178,7 +179,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
     val selectedRegion: StateFlow<MusicRegion> = _selectedRegion.asStateFlow()
 
     private val _selectedLanguages = MutableStateFlow<Set<String>>(
-        homePrefs.getStringSet(KEY_SELECTED_LANGUAGES, null) ?: setOf("Hindi", "English")
+        homePrefs.getStringSet(KEY_SELECTED_LANGUAGES, null) ?: setOf("Hindi")
     )
     val selectedLanguages: StateFlow<Set<String>> = _selectedLanguages.asStateFlow()
 
@@ -193,12 +194,50 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
     private val _sleepRemainingSeconds = MutableStateFlow(0L)
     val sleepRemainingSeconds: StateFlow<Long> = _sleepRemainingSeconds.asStateFlow()
 
+    private val _isDarkMode = MutableStateFlow(
+        homePrefs.getBoolean("is_dark_mode", false)
+    )
+    val isDarkMode: StateFlow<Boolean> = _isDarkMode.asStateFlow()
+
+    fun toggleDarkMode() {
+        val next = !_isDarkMode.value
+        _isDarkMode.value = next
+        homePrefs.edit().putBoolean("is_dark_mode", next).apply()
+    }
+
+    fun setDarkMode(dark: Boolean) {
+        _isDarkMode.value = dark
+        homePrefs.edit().putBoolean("is_dark_mode", dark).apply()
+    }
+
+    private val _similarTracks = MutableStateFlow<List<Track>>(emptyList())
+    val similarTracks: StateFlow<List<Track>> = _similarTracks.asStateFlow()
+
+    private val _isLoadingSimilar = MutableStateFlow(false)
+    val isLoadingSimilar: StateFlow<Boolean> = _isLoadingSimilar.asStateFlow()
+
+    fun loadSimilarTracks(track: Track) {
+        viewModelScope.launch {
+            _isLoadingSimilar.value = true
+            val userLangs = _selectedLanguages.value.ifEmpty { setOf("Hindi") }
+            val primaryLang = userLangs.firstOrNull() ?: "Hindi"
+            val radio = runCatching { music.fetchRadioTracks(track.id, 40) }.getOrDefault(emptyList())
+                .filter { music.isRealSong(it) && isMatchingSelectedLanguages(it, userLangs) }
+            val searchResults = runCatching { music.searchMusicTracks("$primaryLang ${track.artist} hits", 30) }
+                .getOrDefault(emptyList())
+                .filter { music.isRealSong(it) && isMatchingSelectedLanguages(it, userLangs) }
+            _similarTracks.value = (radio + searchResults).distinctBy { it.id }.take(50)
+            _isLoadingSimilar.value = false
+        }
+    }
+
     private var sleepTimerJob: Job? = null
 
     init {
         music.setRegion(_selectedRegion.value.code)
         if (currentUser.value != null && !currentUser.value!!.isGuest) {
             syncCloudOfflineTracks()
+            syncCloudPreferences()
         }
         // Instant Home Screen: immediately show cached sections if available
         val cached = loadCachedHome()
@@ -214,12 +253,23 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
                 if (query.isNotBlank()) performSearch(query, filter)
             }
         }
+        // Auto-cache all recently played tracks so everything in recent history is cached offline
+        viewModelScope.launch(Dispatchers.IO) {
+            recentRepo.recent.collect { list ->
+                list.forEach { tr ->
+                    if (!downloadsRepo.isDownloaded(tr.id)) {
+                        downloadsRepo.cacheTrackIfNeeded(tr, music)
+                    }
+                }
+            }
+        }
         viewModelScope.launch {
             player.events.collect { event ->
                 when (event) {
                     PlaybackEvent.Ended -> handleTrackEnded()
                     PlaybackEvent.SkipNext -> playNext()
                     PlaybackEvent.SkipPrevious -> playPrevious()
+                    PlaybackEvent.Stop -> handlePlaybackStopped()
                     is PlaybackEvent.Error -> handlePlaybackError(event.message)
                 }
             }
@@ -228,6 +278,10 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Track ids already retried via streaming fallback so we never loop. */
     private val streamedFallback = mutableSetOf<String>()
+
+    fun postMessage(msg: String) {
+        _messages.tryEmit(msg)
+    }
 
     private fun handlePlaybackError(message: String) {
         _messages.tryEmit(message)
@@ -250,42 +304,57 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
         if (_isLoadingHome.value && !force) return
         viewModelScope.launch {
             _isLoadingHome.value = true
-            val chosen = _selectedLanguages.value.ifEmpty { setOf("Hindi", "English") }
+            val chosen = _selectedLanguages.value.ifEmpty { setOf("Hindi") }
             val region = _selectedRegion.value
+            val primaryLang = chosen.firstOrNull() ?: "Hindi"
             val specs = mutableListOf<HomeSectionSpec>()
 
-            // 1. Trending in selected region (e.g. "Trending songs in India")
-            val trendingTitle = when (region.code) {
-                "IN" -> "Trending songs in India"
-                "WW" -> "Trending songs Worldwide"
-                else -> "Trending songs in ${region.name}"
+            fun chartIdForLanguage(lang: String): String? = when (lang.lowercase()) {
+                "hindi" -> "VLPL4fGSI1pDJn5RgLW0Sb_zECecWdH_4zOX"
+                "punjabi" -> "VLPL4fGSI1pDJn5JXkyIohg2RstsbL2SnRew"
+                "english" -> "VLPL4fGSI1pDJn49TUu37nJoN2QTeYuRwmNv"
+                "bhojpuri" -> "VLPL4fGSI1pDJn4ivDqrsepD3tvHsp0KTDRM"
+                "haryanvi" -> "VLPL4fGSI1pDJn4tiNLMZVGGt2Kghgw__2u0"
+                "tamil" -> "VLPL4fGSI1pDJn4WX22qg1Po7qKOwOb4H6Sk"
+                "telugu" -> "VLPL4fGSI1pDJn5ALuqpEj_YZ8mEyw9WN8jd"
+                else -> null
             }
-            val trendingQuery = when (region.code) {
-                "IN" -> "trending songs in india"
-                "WW" -> "global trending songs top hits"
-                else -> "trending songs in ${region.name}"
+
+            // 1. Trending strictly in selected languages
+            val trendingTitle = if (chosen.size == 1) {
+                "Trending ${chosen.first()} Songs"
+            } else {
+                "Trending Hits (${chosen.joinToString(", ")})"
             }
-            val trendingChartId = if (region.code == "IN") "VLPL4fGSI1pDJn40WjZ6utkIuj2rNg-7iGsq" else null
+
+            val trendingChartId = if (chosen.size == 1) chartIdForLanguage(chosen.first()) else null
+            val trendingQuery = if (chosen.size == 1) {
+                "trending ${chosen.first().lowercase()} songs top hits"
+            } else {
+                "${chosen.joinToString(" ")} trending songs top hits"
+            }
+
             specs.add(
                 HomeSectionSpec(
                     id = "trending",
                     title = trendingTitle,
-                    subtitle = "Top viral hits in ${region.name} • YouTube Music",
+                    subtitle = "Top chartbusters in ${chosen.joinToString(", ")}",
                     query = trendingQuery,
                     chartBrowseId = trendingChartId,
                 )
             )
 
             // 2. Dedicated language sections
-            for (lang in chosen.take(4)) {
+            for (lang in chosen.take(6)) {
+                val chartId = chartIdForLanguage(lang)
                 val spec = when (lang.lowercase()) {
-                    "hindi" -> HomeSectionSpec("hindi", "Bollywood & Hindi Hits", "Top Hindi chartbusters", "bollywood hits", "VLPL4fGSI1pDJn5RgLW0Sb_zECecWdH_4zOX")
-                    "english" -> HomeSectionSpec("english", "Global Pop Hits", "Top international hits", "pop english hits", "VLPL4fGSI1pDJn49TUu37nJoN2QTeYuRwmNv")
-                    "punjabi" -> HomeSectionSpec("punjabi", "Punjabi Bangers", "Bhangra beats & high bass", "punjabi hits", "VLPL4fGSI1pDJn5JXkyIohg2RstsbL2SnRew")
-                    "bhojpuri" -> HomeSectionSpec("bhojpuri", "Bhojpuri Dhamaka", "Desi vibes & festive party", "bhojpuri hits", "VLPL4fGSI1pDJn4ivDqrsepD3tvHsp0KTDRM")
-                    "haryanvi" -> HomeSectionSpec("haryanvi", "Haryanvi Hits", "Desi swag & folk beats", "haryanvi hits", "VLPL4fGSI1pDJn4tiNLMZVGGt2Kghgw__2u0")
-                    "tamil" -> HomeSectionSpec("tamil", "Tamil Blockbusters", "Kollywood chartbusters", "tamil hits", "VLPL4fGSI1pDJn4WX22qg1Po7qKOwOb4H6Sk")
-                    "telugu" -> HomeSectionSpec("telugu", "Telugu Chartbusters", "Tollywood sensations", "telugu hits", "VLPL4fGSI1pDJn5ALuqpEj_YZ8mEyw9WN8jd")
+                    "hindi" -> HomeSectionSpec("hindi", "Bollywood & Hindi Hits", "Top Hindi chartbusters", "bollywood hindi hits", chartId)
+                    "english" -> HomeSectionSpec("english", "Global Pop Hits", "Top international hits", "pop english hits", chartId)
+                    "punjabi" -> HomeSectionSpec("punjabi", "Punjabi Bangers", "Bhangra beats & high bass", "punjabi hits", chartId)
+                    "bhojpuri" -> HomeSectionSpec("bhojpuri", "Bhojpuri Dhamaka", "Desi vibes & festive party", "bhojpuri hits", chartId)
+                    "haryanvi" -> HomeSectionSpec("haryanvi", "Haryanvi Hits", "Desi swag & folk beats", "haryanvi hits", chartId)
+                    "tamil" -> HomeSectionSpec("tamil", "Tamil Blockbusters", "Kollywood chartbusters", "tamil hits", chartId)
+                    "telugu" -> HomeSectionSpec("telugu", "Telugu Chartbusters", "Tollywood sensations", "telugu hits", chartId)
                     "malayalam" -> HomeSectionSpec("malayalam", "Malayalam Melodies", "Soulful God's own sounds", "malayalam hits songs")
                     "kannada" -> HomeSectionSpec("kannada", "Kannada Hits", "Sandalwood chartbusters", "kannada hits songs")
                     "bengali" -> HomeSectionSpec("bengali", "Bengali Melodies", "Sweet rhythms & modern hits", "bengali hits songs")
@@ -299,32 +368,57 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
             }
 
             // 3. Relax / Chill section
-            val primaryLang = chosen.firstOrNull() ?: "hindi"
             specs.add(
                 HomeSectionSpec(
                     id = "chill",
                     title = "Chill & Focus",
-                    subtitle = "Low-key beats for deep work",
-                    query = "$primaryLang lofi acoustic songs",
+                    subtitle = "Low-key beats in ${chosen.joinToString(", ")}",
+                    query = "${chosen.joinToString(" ")} lofi acoustic songs",
                 )
             )
 
             val loaded = coroutineScope {
                 specs.map { spec ->
                     async {
-                        var tracks: List<Track> = emptyList()
-                        if (!spec.chartBrowseId.isNullOrBlank()) {
-                            tracks = runCatching {
-                                music.fetchMusicCollection(spec.chartBrowseId, spec.title).tracks
-                                    .filter { music.isRealSong(it) }
-                                    .take(20)
-                            }.getOrElse { emptyList() }
+                        val targetLangs = when (spec.id) {
+                            "trending", "chill" -> chosen
+                            else -> setOf(spec.id.replaceFirstChar { it.uppercase() })
                         }
-                        if (tracks.isEmpty()) {
-                            tracks = runCatching {
-                                music.searchMusicTracks(spec.query, 20)
-                                    .filter { music.isRealSong(it) }
-                            }.getOrElse { emptyList() }
+                        var tracks: List<Track> = emptyList()
+
+                        if (spec.id == "trending" && chosen.size > 1) {
+                            val multi = mutableListOf<Track>()
+                            for (l in chosen) {
+                                val cid = chartIdForLanguage(l)
+                                val lTracks = runCatching {
+                                    if (!cid.isNullOrBlank()) {
+                                        music.fetchMusicCollection(cid, "Trending $l").tracks
+                                            .filter { music.isRealSong(it) && isMatchingSelectedLanguages(it, setOf(l)) }
+                                            .take(15)
+                                    } else {
+                                        music.searchMusicTracks("trending ${l.lowercase()} songs", 20)
+                                            .filter { music.isRealSong(it) && isMatchingSelectedLanguages(it, setOf(l)) }
+                                            .take(15)
+                                    }
+                                }.getOrElse { emptyList() }
+                                multi.addAll(lTracks)
+                            }
+                            tracks = multi.distinctBy { it.id }.take(30)
+                        } else {
+                            if (!spec.chartBrowseId.isNullOrBlank()) {
+                                tracks = runCatching {
+                                    music.fetchMusicCollection(spec.chartBrowseId, spec.title).tracks
+                                        .filter { music.isRealSong(it) && isMatchingSelectedLanguages(it, targetLangs) }
+                                        .take(25)
+                                }.getOrElse { emptyList() }
+                            }
+                            if (tracks.size < 12) {
+                                val searched = runCatching {
+                                    music.searchMusicTracks(spec.query, 30)
+                                        .filter { music.isRealSong(it) && isMatchingSelectedLanguages(it, targetLangs) }
+                                }.getOrElse { emptyList() }
+                                tracks = (tracks + searched).distinctBy { it.id }.take(25)
+                            }
                         }
                         spec to tracks
                     }
@@ -359,7 +453,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun updatePreferences(region: MusicRegion, languages: Set<String>) {
-        val chosen = languages.ifEmpty { setOf("Hindi", "English") }
+        val chosen = languages.ifEmpty { setOf("Hindi") }
         _selectedRegion.value = region
         _selectedLanguages.value = chosen
         music.setRegion(region.code)
@@ -367,9 +461,18 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
             .putString(KEY_SELECTED_REGION, region.code)
             .putStringSet(KEY_SELECTED_LANGUAGES, chosen)
             .putBoolean(KEY_LANGUAGES_CONFIGURED, true)
+            .remove(KEY_HOME_SECTIONS)
             .apply()
         _showLanguagePrompt.value = false
         _messages.tryEmit("Region: ${region.flag} ${region.name} • ${chosen.joinToString(", ")}")
+
+        val user = currentUser.value
+        if (user != null && !user.isGuest) {
+            viewModelScope.launch(Dispatchers.IO) {
+                firestoreSync.saveUserPreferences(user.uid, region.code, chosen)
+            }
+        }
+
         loadHome(force = true)
     }
 
@@ -388,11 +491,13 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun loadCachedHome(): List<HomeSection> {
         val raw = homePrefs.getString(KEY_HOME_SECTIONS, null) ?: return emptyList()
+        val chosen = _selectedLanguages.value.ifEmpty { setOf("Hindi") }
         return runCatching {
             val list = json.decodeFromString<List<HomeSection>>(raw)
-            list.map { sec ->
-                sec.copy(tracks = sec.tracks.filter { music.isRealSong(it) })
-            }.filter { it.tracks.isNotEmpty() }
+            list.mapNotNull { sec ->
+                val filtered = sec.tracks.filter { music.isRealSong(it) && isMatchingSelectedLanguages(it, chosen) }
+                if (filtered.isEmpty()) null else sec.copy(tracks = filtered)
+            }
         }.getOrElse { emptyList() }
     }
 
@@ -581,18 +686,27 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
 
     fun playTrack(track: Track, tracks: List<Track> = listOf(track), isPlaylist: Boolean = false) {
         isPlaylistMode = isPlaylist
-        val list = tracks.ifEmpty { listOf(track) }
-        baseQueue = list
+        val userLangs = _selectedLanguages.value.ifEmpty { setOf("Hindi") }
+        val rawList = tracks.ifEmpty { listOf(track) }
+        val filteredList = if (!isPlaylist || (rawList.size > 1 && !rawList.all { isMatchingSelectedLanguages(it, userLangs) })) {
+            val matching = rawList.filter { isMatchingSelectedLanguages(it, userLangs) }
+            if (matching.isNotEmpty()) {
+                if (matching.any { it.id == track.id }) matching else listOf(track) + matching.filter { it.id != track.id }
+            } else rawList
+        } else {
+            rawList
+        }
+        baseQueue = filteredList
         if (_shuffleEnabled.value) {
-            val shuffled = listOf(track) + list.filterNot { it.id == track.id }.shuffled()
+            val shuffled = listOf(track) + filteredList.filterNot { it.id == track.id }.shuffled()
             queue.value = shuffled
             queueIndex = 0
             startTrack(shuffled.first())
         } else {
-            val index = list.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
-            queue.value = list
+            val index = filteredList.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
+            queue.value = filteredList
             queueIndex = index
-            startTrack(list[index])
+            startTrack(filteredList[index])
         }
     }
 
@@ -601,9 +715,12 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
             _messages.tryEmit("Nothing to play here yet")
             return
         }
+        val userLangs = _selectedLanguages.value.ifEmpty { setOf("Hindi") }
+        val validTracks = if (isPlaylist) tracks else tracks.filter { isMatchingSelectedLanguages(it, userLangs) }
+        val toPlay = validTracks.ifEmpty { tracks }
         isPlaylistMode = isPlaylist
         val shouldShuffle = shuffle || _shuffleEnabled.value
-        playTrack(if (shouldShuffle) tracks.random() else tracks.first(), tracks, isPlaylist = isPlaylist)
+        playTrack(if (shouldShuffle) toPlay.random() else toPlay.first(), toPlay, isPlaylist = isPlaylist)
     }
 
     fun playOffline(shuffle: Boolean = _shuffleEnabled.value) {
@@ -654,12 +771,17 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
 
     fun requestLyrics(track: Track) {
         val existing = _lyrics.value[track.id]
-        if (existing != null && !existing.loading) return
-        if (existing != null) return // already loading — synced/plain dono
-        viewModelScope.launch {
+        if (existing != null && !existing.loading && !existing.failed) return
+        if (existing?.loading == true) return // already loading
+        viewModelScope.launch(Dispatchers.IO) {
             _lyrics.value = _lyrics.value + (track.id to LyricsUi(loading = true))
 
-            // Pahle TIME-SYNCED (LRCLIB/LRC) — realtime highlight ke liye.
+            // Plain lyrics ko concurrently launch karo as instant fallback
+            val plainDeferred = async {
+                runCatching { music.lyrics(track) }.getOrNull()
+            }
+
+            // Realtime time-synced lyrics (LRCLIB ~600ms, phir BetterLyrics)
             val timed = runCatching { music.timedLyrics(track) }.getOrNull()
             if (!timed.isNullOrEmpty()) {
                 android.util.Log.d("RivaLyrics", "synced ${track.id}: ${timed.size} lines")
@@ -667,20 +789,13 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
 
-            val result = runCatching { music.lyrics(track) }
-            result.onFailure {
-                android.util.Log.e("RivaLyrics", "fail ${track.id}: ${it.message}")
-            }
-            result.onSuccess {
-                android.util.Log.d("RivaLyrics", "ok ${track.id}: ${it.lines.size} lines (plain)")
-            }
-            _lyrics.value = _lyrics.value + when {
-                result.isSuccess -> {
-                    val lines = result.getOrThrow().lines
-                    track.id to LyricsUi(lines = lines, failed = lines.isEmpty())
-                }
-                else -> track.id to LyricsUi(failed = true)
-            }
+            // Agar synced nahi mila, plain lyrics ready milengi
+            val plain = plainDeferred.await()
+            val lines = plain?.lines.orEmpty()
+            _lyrics.value = _lyrics.value + (track.id to LyricsUi(
+                lines = lines,
+                failed = lines.isEmpty(),
+            ))
         }
     }
 
@@ -689,41 +804,57 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
             player.replay()
             return
         }
+        val userLangs = _selectedLanguages.value.ifEmpty { setOf("Hindi") }
         val list = queue.value
         if (list.isEmpty()) return
-        if (queueIndex + 1 < list.size) {
-            queueIndex += 1
-            startTrack(list[queueIndex])
-            return
+
+        var nextIdx = queueIndex + 1
+        while (nextIdx < list.size) {
+            val candidate = list[nextIdx]
+            if (isMatchingSelectedLanguages(candidate, userLangs)) {
+                queueIndex = nextIdx
+                startTrack(candidate)
+                return
+            }
+            nextIdx++
         }
+
         // If repeat all is on, loop back to the beginning of the queue
         if (_repeatMode.value == RepeatMode.ALL) {
-            queueIndex = 0
-            startTrack(list[0])
-            return
+            val firstMatching = list.indexOfFirst { isMatchingSelectedLanguages(it, userLangs) }
+            if (firstMatching >= 0) {
+                queueIndex = firstMatching
+                startTrack(list[firstMatching])
+                return
+            }
         }
+
         // In playlist mode, strictly loop within the playlist and do NOT inject outside songs
         if (isPlaylistMode) {
-            queueIndex = 0
-            startTrack(list[0])
-            return
+            val firstMatching = list.indexOfFirst { isMatchingSelectedLanguages(it, userLangs) }
+            if (firstMatching >= 0) {
+                queueIndex = firstMatching
+                startTrack(list[firstMatching])
+                return
+            }
         }
-        // Queue khatam: related songs (radio) append karo.
+
+        // Queue khatam: related songs strictly matching selected languages append karo.
         viewModelScope.launch {
             val cur = _currentTrack.value ?: return@launch
             val existing = list.map { it.id }.toSet()
             val chain = relatedChain(cur).filterNot { it.id in existing }
-            val extended = if (chain.isNotEmpty()) list + chain else null
-            if (extended != null) {
+            if (chain.isNotEmpty()) {
                 val toAdd = if (_shuffleEnabled.value) chain.shuffled() else chain
                 val updated = list + toAdd
                 queue.value = updated
                 baseQueue = list + chain
-                queueIndex += 1
+                queueIndex = list.size
                 startTrack(updated[queueIndex])
             } else {
-                queueIndex = 0
-                startTrack(list[0])
+                val fallbackIdx = list.indexOfFirst { isMatchingSelectedLanguages(it, userLangs) }.coerceAtLeast(0)
+                queueIndex = fallbackIdx
+                startTrack(list[fallbackIdx])
             }
         }
     }
@@ -759,32 +890,355 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
      *  1) mood/type keywords (sad/lofi/party/romantic...) + artist se search
      *  2) title-token overlap se same-song variants filter out
      */
+    /**
+     * Strictly verifies if a candidate track matches the user's chosen languages
+     * and filters out foreign/unwanted language songs (e.g. Persian/Farsi, Arabic, Russian, Turkish, etc.)
+     * as well as unselected Indian regional languages and Western songs if English is not selected.
+     */
+    private fun isMatchingSelectedLanguages(candidate: Track, userLanguages: Set<String>): Boolean {
+        val title = candidate.title
+        val artist = candidate.artist
+        val fullText = "$title $artist".lowercase()
+
+        // 1. Foreign script checks:
+        // Arabic / Persian / Farsi / Urdu characters
+        val hasArabicOrPersianScript = title.any {
+            it in '\u0600'..'\u06FF' || it in '\u0750'..'\u077F' || it in '\u08A0'..'\u08FF' ||
+            it in '\uFB50'..'\uFDFF' || it in '\uFE70'..'\uFEFF'
+        } || artist.any {
+            it in '\u0600'..'\u06FF' || it in '\u0750'..'\u077F' || it in '\u08A0'..'\u08FF' ||
+            it in '\uFB50'..'\uFDFF' || it in '\uFE70'..'\uFEFF'
+        }
+        if (hasArabicOrPersianScript && "Urdu" !in userLanguages) {
+            return false // Farsi / Arabic / Persian song detected without Urdu selected
+        }
+
+        // Cyrillic (Russian, etc.)
+        if (title.any { it in '\u0400'..'\u04FF' } || artist.any { it in '\u0400'..'\u04FF' }) {
+            return false
+        }
+
+        // CJK / Hangul / Thai / Hebrew / Greek
+        if (title.any {
+                it in '\u4E00'..'\u9FFF' || it in '\uAC00'..'\uD7AF' || it in '\u3040'..'\u30FF' ||
+                it in '\u0E00'..'\u0E7F' || it in '\u0590'..'\u05FF' || it in '\u0370'..'\u03FF'
+            } || artist.any {
+                it in '\u4E00'..'\u9FFF' || it in '\uAC00'..'\uD7AF' || it in '\u3040'..'\u30FF' ||
+                it in '\u0E00'..'\u0E7F' || it in '\u0590'..'\u05FF' || it in '\u0370'..'\u03FF'
+            }) {
+            return false
+        }
+
+        // 2. Explicit foreign language keywords in title or artist (transliterated):
+        val foreignKeywords = listOf(
+            "farsi", "persian", "iran", "irani", "ahang", "ahangi", "taraneh", "ghadimi",
+            "aramesh", "shadmehr", "aghili", "ebi", "moein", "googoosh", "sasy", "tataloo", "chavoshi",
+            "mohsen chavoshi", "mohsen yeganeh", "yeganeh", "khosravi", "sirvan khosravi", "xaniar",
+            "reza sadeghi", "aron afshar", "garsha rezaei", "behnam bani", "macan band", "evan band",
+            "babak jahanbakhsh", "alireza talischi", "meysam ebrahimi", "kasra zahedi", "ali yasini",
+            "ragheb", "sina derakhshande", "shervin hajipour", "hoorosh", "puzzle band", "chaartaar",
+            "sogand", "zedbazi", "mehrad hidden", "homayoun shajarian", "shajarian", "hayedeh", "mahasti",
+            "homeyra", "kourosh yaghmaei", "yaghmaei", "pouya", "dariush", "siavash ghomayshi",
+            "radio javan", "pmc music", "avang", "taraneh records", "persian music", "persian pop",
+            "persian remix", "ahang jadid", "ahang farsi", "remix farsi", "asheghaneh", "delbar", "delam",
+            "beman", "tohi", "arash", "kamran hooman", "shahram shabpareh", "sattar", "bijan mortazavi",
+            "farhad mehrad", "vigen", "habib", "morvarid", "masih arash", "ashvan", "naser zeynali",
+            "mohammad alizadeh", "farzad farzin", "saman jalili", "reza bahram", "ali zand vakili",
+            "hojat ashrafzadeh", "arash ap", "haamim", "hichkas", "fadaei", "shayea", "bahram",
+            "putak", "sohrab mj", "wantons", "koorosh", "sami beigi", "jamal jamaloo", "jamal kudu",
+            "turkce", "turkish", "türkçe", "tarkan", "sezen aksu", "reynmen", "ezhel", "murat boz",
+            "hadise", "mustafa sandal", "ebru gundes", "ibrahim tatlises", "mor ve otesi", "madrigal",
+            "dedubluman", "canozan", "emre aydin", "ziynet sali", "edis", "zeynep bastik", "bilal sonses",
+            "buray", "sagopa kajmer", "lvbel c5", "semicenk", "kurtulus kus", "burak bulut",
+            "arabic", "khaleeji", "dabke", "rotana", "amr diab", "nancy ajram", "elissa", "tamer hosny",
+            "sherine", "mohamed ramadan", "saad lamjarred", "balqees", "hussain al jassmi",
+            "majid al mohandis", "assala", "ragheb alama", "kadim al sahir", "cheb khaled",
+            "mahraganat", "aghani", "shaabi", "habibi", "habibtak", "tamally maak", "cairokee", "wegz",
+            "afghan", "pashto", "tajik", "kurdish", "azeri", "azerbaijan", "russian", "morgenshtern",
+            "kizaru", "jah khalib", "anna asti", "jony", "rauf faik",
+            "k-pop", "kpop", "j-pop", "jpop", "c-pop", "anime", "bts", "blackpink", "twice", "stray kids",
+            "newjeans", "aespa", "ive", "le sserafim", "reggaeton", "bachata", "bad bunny", "j balvin",
+            "ozuna", "daddy yankee", "maluma", "karol g", "rauw alejandro", "pesopluma", "shakira",
+            "francais", "gims", "stromae", "maneskin"
+        )
+        for (kw in foreignKeywords) {
+            if (kw.contains(" ")) {
+                if (fullText.contains(kw)) return false
+            } else {
+                if (fullText.contains(Regex("\\b${Regex.escape(kw)}\\b", RegexOption.IGNORE_CASE))) {
+                    return false
+                }
+            }
+        }
+
+        // 3. Indian language scripts:
+        val hasGurmukhi = title.any { it in '\u0A00'..'\u0A7F' } || artist.any { it in '\u0A00'..'\u0A7F' }
+        if (hasGurmukhi && "Punjabi" !in userLanguages) return false
+
+        val hasTamil = title.any { it in '\u0B80'..'\u0BFF' } || artist.any { it in '\u0B80'..'\u0BFF' }
+        if (hasTamil && "Tamil" !in userLanguages) return false
+
+        val hasTelugu = title.any { it in '\u0C00'..'\u0C7F' } || artist.any { it in '\u0C00'..'\u0C7F' }
+        if (hasTelugu && "Telugu" !in userLanguages) return false
+
+        val hasKannada = title.any { it in '\u0C80'..'\u0CFF' } || artist.any { it in '\u0C80'..'\u0CFF' }
+        if (hasKannada && "Kannada" !in userLanguages) return false
+
+        val hasMalayalam = title.any { it in '\u0D00'..'\u0D7F' } || artist.any { it in '\u0D00'..'\u0D7F' }
+        if (hasMalayalam && "Malayalam" !in userLanguages) return false
+
+        val hasBengali = title.any { it in '\u0980'..'\u09FF' } || artist.any { it in '\u0980'..'\u09FF' }
+        if (hasBengali && "Bengali" !in userLanguages) return false
+
+        val hasGujarati = title.any { it in '\u0A80'..'\u0AFF' } || artist.any { it in '\u0A80'..'\u0AFF' }
+        if (hasGujarati && "Gujarati" !in userLanguages) return false
+
+        val hasOdia = title.any { it in '\u0B00'..'\u0B7F' } || artist.any { it in '\u0B00'..'\u0B7F' }
+        if (hasOdia && "Odia" !in userLanguages) return false
+
+        // Devanagari script: Hindi, Marathi, Bhojpuri, Rajasthani, Haryanvi
+        val hasDevanagari = title.any { it in '\u0900'..'\u097F' } || artist.any { it in '\u0900'..'\u097F' }
+        if (hasDevanagari && !userLanguages.any { it in listOf("Hindi", "Marathi", "Bhojpuri", "Rajasthani", "Haryanvi") }) {
+            return false
+        }
+
+        fun matchesAny(keywords: List<String>): Boolean {
+            return keywords.any { kw ->
+                if (kw.contains(" ")) fullText.contains(kw)
+                else fullText.contains(Regex("\\b${Regex.escape(kw)}\\b", RegexOption.IGNORE_CASE))
+            }
+        }
+
+        // 4. Regional Indian languages transliterated in Latin:
+        if ("Punjabi" !in userLanguages) {
+            val punjabiMarkers = listOf(
+                "punjabi", "bhangra", "giddha", "jatt", "jaat", "kudi", "gabru", "pendu", "munde",
+                "soorma", "boliyan", "sardar", "sardarni", "pagg", "shada", "yaari", "geetan",
+                "patiala", "amritsar", "chandigarh", "ludhiana", "bamb", "mutiyar", "chobbar", "jatti",
+                "asla", "hathyar", "jhumke", "surma", "pind", "majha", "malwa", "doaba",
+                "karan aujla", "diljit dosanjh", "ap dhillon", "sidhu moose wala", "sidhu moosewala",
+                "shubh", "amrit maan", "jordan sandhu", "mankirt aulakh", "jassie gill", "tarsem jassar",
+                "nimrat khaira", "sunanda sharma", "jasmine sandlas", "gurdas maan", "babbu maan",
+                "jazzy b", "garry sandhu", "gippy grewal", "amrinder gill", "parmish verma",
+                "arjan dhillon", "cheema y", "gurinder gill", "wazir patar", "tegi pannu", "chani nattan",
+                "hustinder", "prem dhillon", "korala maan", "shivjot", "kulwinder billa", "rajvir jawanda",
+                "prabh gill", "khan bhaini", "r nait", "gurnam bhullar", "ammy virk", "balkar sidhu",
+                "harbhajan mann", "manmohan waris", "kamal heer", "surjit bindrakhia", "kuldeep manak",
+                "chamkila", "amar singh chamkila", "speed records", "white hill music", "geet mp3",
+                "saga hits", "jass records", "apna punjab"
+            )
+            if (matchesAny(punjabiMarkers)) return false
+        }
+
+        if ("Bhojpuri" !in userLanguages) {
+            val bhojpuriMarkers = listOf(
+                "bhojpuri", "choli", "lahanga", "bhatar", "raja ji", "saiyaan", "devar", "kamariya",
+                "bhojpurya", "pawan singh", "khesari lal", "dinesh lal", "nirahua", "manoj tiwari",
+                "ritesh pandey", "arvind akela kallu", "samar singh", "ankush raja", "pramod premi",
+                "shilpi raj", "antra singh priyanka", "akshara singh", "kalpana patowary",
+                "priyanka singh", "neelkamal singh", "gunjan singh", "wave music", "srf music",
+                "worldwide records bhojpuri", "aadishakti films", "yashi films"
+            )
+            if (matchesAny(bhojpuriMarkers)) return false
+        }
+
+        if ("Haryanvi" !in userLanguages) {
+            val haryanviMarkers = listOf(
+                "haryanvi", "ragni", "chori", "chora", "daman", "diler", "ghunghat", "sapna choudhary",
+                "renuka panwar", "masoom sharma", "gulzaar chhaniwala", "diler kharkiya", "ajay hooda",
+                "ruchika jangid", "sumit goswami", "amit saini rohtakiya", "kd desirock", "md desirock",
+                "surender romio", "anu kadyan", "raju punjabi", "vishvajeet choudhary", "uttar kumar",
+                "mor music", "sonotek", "vats records", "nav haryanvi"
+            )
+            if (matchesAny(haryanviMarkers)) return false
+        }
+
+        if ("Tamil" !in userLanguages) {
+            val tamilMarkers = listOf(
+                "tamil", "kollywood", "kuthu", "anirudh ravichander", "yuvan shankar raja", "harris jayaraj",
+                "ilaiyaraaja", "d. imman", "santhosh narayanan", "g.v. prakash", "hiphop tamizha",
+                "sam c.s.", "sean roldan", "think music india", "sony music south", "sivakarthikeyan",
+                "kamal haasan", "rajinikanth"
+            )
+            if (matchesAny(tamilMarkers)) return false
+        }
+
+        if ("Telugu" !in userLanguages) {
+            val teluguMarkers = listOf(
+                "telugu", "tollywood", "s. thaman", "thaman s", "devi sri prasad", "dsp",
+                "m.m. keeravaani", "keeravani", "ram miriyala", "anurag kulkarni", "mangli",
+                "rahul sipligunj", "penchal das", "mickey j meyer", "vivek sagar", "chaitan bharadwaj",
+                "aditya music", "lahari music"
+            )
+            if (matchesAny(teluguMarkers)) return false
+        }
+
+        if ("Malayalam" !in userLanguages) {
+            val malayalamMarkers = listOf(
+                "malayalam", "mollywood", "sushin shyam", "jakes bejoy", "shaan rahman",
+                "hesham abdul wahab", "vidyasagar", "deepak dev", "k.j. yesudas", "vineeth sreenivasan",
+                "sithara krishnakumar", "job kurian", "manorama music", "muzik247"
+            )
+            if (matchesAny(malayalamMarkers)) return false
+        }
+
+        if ("Kannada" !in userLanguages) {
+            val kannadaMarkers = listOf(
+                "kannada", "sandalwood", "ravi basrur", "charan raj", "arjun janya",
+                "ajaneesh loknath", "v. harikrishna", "vijay prakash", "sanjith hegde",
+                "raghu dixit", "anand audio"
+            )
+            if (matchesAny(kannadaMarkers)) return false
+        }
+
+        if ("Bengali" !in userLanguages) {
+            val bengaliMarkers = listOf(
+                "bengali", "bangla", "rabindra sangeet", "anupam roy", "rupam islam", "somlata",
+                "iman chakraborty", "nachiketa", "shilajit", "svf music"
+            )
+            if (matchesAny(bengaliMarkers)) return false
+        }
+
+        if ("Marathi" !in userLanguages) {
+            val marathiMarkers = listOf(
+                "marathi", "lavani", "povada", "ajay-atul", "ajay atul", "swapnil bandodkar",
+                "avadhoot gupte", "bela shende", "anand shinde", "adarsh shinde", "mahesh kale",
+                "zee music marathi"
+            )
+            if (matchesAny(marathiMarkers)) return false
+        }
+
+        if ("Gujarati" !in userLanguages) {
+            val gujaratiMarkers = listOf(
+                "gujarati", "garba", "dandiya", "dayro", "kirtidan gadhvi", "kinjal dave",
+                "geeta rabari", "jignesh kaviraj", "osman mir", "aditya gadhvi", "jigardan gadhavi"
+            )
+            if (matchesAny(gujaratiMarkers)) return false
+        }
+
+        if ("Rajasthani" !in userLanguages) {
+            val rajasthaniMarkers = listOf(
+                "rajasthani", "marwadi", "ghoomar", "mame khan", "seema mishra", "prakash mali",
+                "chotu singh rawna"
+            )
+            if (matchesAny(rajasthaniMarkers)) return false
+        }
+
+        // 5. English / Western filtering when "English" is NOT selected:
+        if ("English" !in userLanguages) {
+            val westernArtists = listOf(
+                "taylor swift", "ed sheeran", "justin bieber", "drake", "the weeknd", "billie eilish",
+                "ariana grande", "bruno mars", "dua lipa", "post malone", "rihanna", "eminem",
+                "katy perry", "maroon 5", "coldplay", "imagine dragons", "adele", "beyonce",
+                "harry styles", "selena gomez", "charlie puth", "shawn mendes", "sam smith", "sia",
+                "david guetta", "calvin harris", "alan walker", "marshmello", "chainsmokers", "avicii",
+                "lady gaga", "miley cyrus", "kendrick lamar", "travis scott", "kanye west",
+                "olivia rodrigo", "sabrina carpenter", "sza", "lana del rey", "camila cabello",
+                "bebe rexha", "jason derulo", "pitbull", "cardi b", "nicki minaj", "lil nas x",
+                "one direction", "queen", "the beatles", "michael jackson", "linkin park", "green day",
+                "martin garrix", "tiesto", "kygo", "zedd", "skrillex", "diplo", "clean bandit",
+                "alessia cara", "halsey", "conan gray", "troye sivan", "lauv", "jeremy zucker"
+            )
+            if (matchesAny(westernArtists)) return false
+
+            val hasIndianIndicator = hasDevanagari || hasGurmukhi || hasTamil || hasTelugu ||
+                    hasKannada || hasMalayalam || hasBengali || hasGujarati || hasOdia ||
+                    matchesAny(listOf(
+                        "t-series", "tseries", "zee music", "sony music india", "yrf", "saregama",
+                        "tips official", "venus", "desi music factory", "vyrl", "white hill",
+                        "jjust music", "arijit singh", "atif aslam", "neha kakkar", "shreya ghoshal",
+                        "jubin nautiyal", "sonu nigam", "kumar sanu", "udit narayan", "alka yagnik",
+                        "lata mangeshkar", "kishore kumar", "mohammed rafi", "mukesh", "asha bhosle",
+                        "sunidhi chauhan", "mohit chauhan", "kk", "rahat fateh ali khan", "vishal mishra",
+                        "darshan raval", "armaan malik", "badshah", "honey singh", "yo yo honey singh",
+                        "mika singh", "sachin-jigar", "sachin jigar", "pritam", "vishal-shekhar",
+                        "vishal shekhar", "shankar-ehsaan-loy", "amit trivedi", "mithoon", "tanishk bagchi",
+                        "salim-sulaiman", "salim sulaiman", "ankit tiwari", "stebin ben", "jasleen royal",
+                        "shilpa rao", "sachet tandon", "parampara tandon", "tulsi kumar", "palak muchhal",
+                        "monali thakur", "benny dayal", "lucky ali", "papon", "javed ali", "sukhwinder singh",
+                        "himesh reshammiya", "tony kakkar", "dhvani bhanushali", "shaan", "adnan sami",
+                        "jagjit singh", "anuradha paudwal", "kavita krishnamurthy", "pankaj udhas",
+                        "zaeden", "anuv jain", "prateek kuhad", "king", "mc stan", "emiway bantai",
+                        "raftaar", "divine", "ikka", "seedhe maut", "krsna", "kr\$na",
+                        "pyar", "pyaar", "dil", "ishq", "mohabbat", "tum", "hum", "meri", "mera",
+                        "tere", "teri", "zindagi", "sanam", "jaan", "deewana", "duniya", "ankhon",
+                        "naina", "saath", "raat", "khuda", "rabba", "kabhi", "tu", "hai", "kuch",
+                        "barsaat", "yaad", "geet", "gaana", "tera", "humdard", "humsafar", "chura",
+                        "aashiqui", "kesariya", "channa", "mereya", "tujhe", "kitna", "chahne", "lage",
+                        "pal", "hawa", "rooh", "dhadkan", "musafir", "chal", "kaise", "jeena",
+                        "saaware", "kaho", "bewafa", "judaai", "sufi", "ghazal", "bhajan", "aarti",
+                        "bollywood", "shayari", "gerua", "hawayein", "tum hi ho", "raabta", "soch na sake",
+                        "kabira", "subhanallah", "ilahi", "agar tum saath ho", "tera yaar hoon main",
+                        "o maahi", "lut gaye", "chaleya", "jawan", "pathaan", "satranga", "pehle bhi main"
+                    ))
+            if (!hasIndianIndicator) return false
+        }
+
+        // 6. If ONLY "English" is selected: reject tracks with Indian regional scripts/artists/labels
+        if (userLanguages.size == 1 && "English" in userLanguages) {
+            val hasIndianMarker = hasDevanagari || hasGurmukhi || hasTamil || hasTelugu ||
+                    hasKannada || hasMalayalam || hasBengali || hasGujarati || hasOdia ||
+                    matchesAny(listOf(
+                        "t-series", "tseries", "zee music", "sony music india", "yrf", "saregama",
+                        "tips official", "speed records", "white hill", "arijit singh", "neha kakkar",
+                        "shreya ghoshal", "jubin nautiyal", "sonu nigam", "kumar sanu", "udit narayan",
+                        "alka yagnik", "lata mangeshkar", "kishore kumar", "mohammed rafi", "badshah",
+                        "honey singh", "pritam", "bollywood", "punjabi", "bhojpuri", "haryanvi"
+                    ))
+            if (hasIndianMarker) return false
+        }
+
+        return true
+    }
+
     private suspend fun relatedChain(track: Track): List<Track> {
+        val userLangs = _selectedLanguages.value.ifEmpty { setOf("Hindi") }
+        val collected = mutableListOf<Track>()
+        val seen = mutableSetOf(track.id)
+
+        // 1. YouTube Music Automix / Radio queue, strictly filtered for user's selected languages
+        val radio = runCatching { music.fetchRadioTracks(track.id, 40) }.getOrDefault(emptyList())
+        val matchingRadio = radio.filter {
+            it.id != track.id && music.isRealSong(it) && isMatchingSelectedLanguages(it, userLangs)
+        }
+        matchingRadio.forEach {
+            if (seen.add(it.id)) collected.add(it)
+        }
+
+        // 2. Targeted search using the selected languages & artist/mood to guarantee 100% matching language
         val curWords = titleTokens(track.title)
         val curKey = curWords.take(3).toSet()
         val mood = moodOf("${track.title} ${track.artist}")
+
         val queries = buildList {
-            add("best " + (mood + listOf(track.artist, "songs")).joinToString(" "))
-            add("trending ${mood.joinToString(" ")} songs 2026".trim())
-            // Fallback: title-ref search (purana behaviour), same-song filter ke saath.
-            add("${track.title.take(40)} ${track.artist}")
+            for (lang in userLangs) {
+                add("$lang ${track.artist} hits")
+                if (mood.isNotEmpty()) {
+                    add("$lang ${mood.joinToString(" ")} songs".trim())
+                }
+                add("best $lang ${track.artist} songs")
+                add("top $lang hit songs")
+                add("$lang ${track.title.take(30)} ${track.artist}")
+            }
         }
-        val seen = mutableSetOf(track.id)
+
         for (query in queries) {
+            if (collected.size >= 25) break
             val found = runCatching { music.searchMusicTracks(query, 25) }
                 .getOrDefault(emptyList())
                 .ifEmpty { runCatching { music.search(query, 25) }.getOrDefault(emptyList()) }
                 .asSequence()
-                .filter { it.id !in seen && music.isRealSong(it) }
+                .filter { it.id !in seen && music.isRealSong(it) && isMatchingSelectedLanguages(it, userLangs) }
                 .filter { cand -> titleTokens(cand.title).intersect(curKey).size < 2 }
                 .filter { it.id != track.id }
                 .distinctBy { it.id }
                 .take(10)
                 .toList()
-            found.forEach { seen.add(it.id) }
-            if (found.isNotEmpty()) return found
+            found.forEach {
+                if (seen.add(it.id)) collected.add(it)
+            }
         }
-        return emptyList()
+        return collected
     }
 
     /** Meaningful title tokens (brackets/labels/pipe-junk हटा के). */
@@ -815,18 +1269,12 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
     private fun handleTrackEnded() {
         when (_repeatMode.value) {
             RepeatMode.ONE -> player.replay()
-            RepeatMode.ALL -> playNext()
-            RepeatMode.OFF -> {
-                val list = queue.value
-                if (queueIndex + 1 < list.size) {
-                    queueIndex += 1
-                    startTrack(list[queueIndex])
-                } else if (isPlaylistMode && list.isNotEmpty()) {
-                    queueIndex = 0
-                    startTrack(list[0])
-                }
-            }
+            RepeatMode.ALL, RepeatMode.OFF -> playNext()
         }
+    }
+
+    private fun handlePlaybackStopped() {
+        player.pause()
     }
 
     fun playPrevious() {
@@ -923,6 +1371,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
                 _showAuthPrompt.value = false
                 _messages.tryEmit("Welcome, ${profile.displayName}!")
                 syncCloudOfflineTracks()
+                syncCloudPreferences()
                 if (!homePrefs.getBoolean(KEY_LANGUAGES_CONFIGURED, false)) {
                     _showLanguagePrompt.value = true
                 }
@@ -950,6 +1399,34 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
             _messages.tryEmit("Signed out")
             _showAuthPrompt.value = true
             onComplete()
+        }
+    }
+
+    fun syncCloudPreferences() {
+        val user = currentUser.value ?: return
+        if (user.isGuest) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val remote = firestoreSync.fetchUserPreferences(user.uid)
+            if (remote != null) {
+                val (regionCode, remoteLangs) = remote
+                val matchingRegion = AVAILABLE_REGIONS.firstOrNull { it.code == regionCode } ?: _selectedRegion.value
+                val validLangs = remoteLangs.ifEmpty { setOf("Hindi") }
+                _selectedRegion.value = matchingRegion
+                _selectedLanguages.value = validLangs
+                music.setRegion(matchingRegion.code)
+                homePrefs.edit()
+                    .putString(KEY_SELECTED_REGION, matchingRegion.code)
+                    .putStringSet(KEY_SELECTED_LANGUAGES, validLangs)
+                    .putBoolean(KEY_LANGUAGES_CONFIGURED, true)
+                    .remove(KEY_HOME_SECTIONS)
+                    .apply()
+                _showLanguagePrompt.value = false
+                loadHome(force = true)
+            } else {
+                val currentReg = _selectedRegion.value.code
+                val currentLangs = _selectedLanguages.value.ifEmpty { setOf("Hindi") }
+                firestoreSync.saveUserPreferences(user.uid, currentReg, currentLangs)
+            }
         }
     }
 
@@ -1002,11 +1479,6 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
 
     fun download(track: Track) {
         val user = currentUser.value
-        if (user == null || user.isGuest) {
-            _showAuthPrompt.value = true
-            _messages.tryEmit("Sign in with Google to save offline music")
-            return
-        }
         val entry = downloads.value.firstOrNull { it.track.id == track.id }
         if (entry != null && !entry.isCached) {
             _messages.tryEmit("Already saved for offline listening")
@@ -1016,17 +1488,23 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
             // Cached copy exists — promote it to a permanent save instead of downloading again.
             if (downloadsRepo.promoteToManual(track.id)) {
                 _messages.tryEmit("Saved offline permanently")
-                viewModelScope.launch {
-                    firestoreSync.saveOfflineTrack(user.uid, track)
+                if (user != null && !user.isGuest) {
+                    viewModelScope.launch {
+                        firestoreSync.saveOfflineTrack(user.uid, track)
+                    }
                 }
             }
             return
         }
         viewModelScope.launch {
             try {
+                _messages.tryEmit("Downloading \"${track.title}\"...")
                 val resolution = music.resolveAudio(track)
                 downloadsRepo.download(track, resolution)
-                firestoreSync.saveOfflineTrack(user.uid, track, resolution.url)
+                if (user != null && !user.isGuest) {
+                    firestoreSync.saveOfflineTrack(user.uid, track, resolution.url)
+                }
+                _messages.tryEmit("Downloaded \"${track.title}\"")
             } catch (t: Throwable) {
                 _messages.tryEmit("Download failed: ${t.message}")
             }
@@ -1039,15 +1517,12 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun promoteCachedToOffline(track: Track) {
         val user = currentUser.value
-        if (user == null || user.isGuest) {
-            _showAuthPrompt.value = true
-            _messages.tryEmit("Sign in with Google to save offline music")
-            return
-        }
         viewModelScope.launch {
             if (downloadsRepo.promoteToManual(track.id)) {
                 _messages.tryEmit("Saved offline permanently")
-                firestoreSync.saveOfflineTrack(user.uid, track)
+                if (user != null && !user.isGuest) {
+                    firestoreSync.saveOfflineTrack(user.uid, track)
+                }
             } else {
                 downloadsRepo.delete(track.id)
                 download(track)
@@ -1141,6 +1616,8 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
         resolveJob?.cancel()
         _currentTrack.value = track
         _isResolving.value = true
+        // Prefetch lyrics immediately so they display with zero delay on tap
+        requestLyrics(track)
         resolveJob = viewModelScope.launch {
             try {
                 val local = downloadsRepo.localPath(track.id)

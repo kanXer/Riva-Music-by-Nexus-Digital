@@ -59,13 +59,12 @@ private fun buildLightScheme() = lightColorScheme(
 
 @Composable
 fun RivaMusicTheme(
+    darkTheme: Boolean = false,
     content: @Composable () -> Unit,
 ) {
-    // Theme system default follow karta hai — koi manual override nahi.
-    val dark = isSystemInDarkTheme()
-    RivaIsDark = dark
+    RivaIsDark = darkTheme
     MaterialTheme(
-        colorScheme = if (dark) buildDarkScheme() else buildLightScheme(),
+        colorScheme = if (darkTheme) buildDarkScheme() else buildLightScheme(),
         typography = Typography,
         content = content,
     )

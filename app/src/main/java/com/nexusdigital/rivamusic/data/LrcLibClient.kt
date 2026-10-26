@@ -22,56 +22,84 @@ import okhttp3.RequestBody.Companion.toRequestBody
  * available nahi ho to MusicRepository plain lyrics fallback use karta hai.
  */
 class LrcLibClient(
-    private val http: OkHttpClient = NetworkModule.getOkHttpClient(),
+    private val http: OkHttpClient = NetworkModule.getOkHttpClient().newBuilder()
+        .connectTimeout(3500, TimeUnit.MILLISECONDS)
+        .readTimeout(3500, TimeUnit.MILLISECONDS)
+        .callTimeout(4000, TimeUnit.MILLISECONDS)
+        .build(),
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     /** [startMs, line] sorted list ya null (synced nahi mila). */
     suspend fun searchSynced(artist: String, title: String, durationSeconds: Int): List<LyricLine>? =
         withContext(Dispatchers.IO) {
-            val cleanArtist = artist.replace(Regex("\\(.*?\\)"), " ").trim()
-            val cleanTitle = title.substringBefore("-").trim().ifBlank { title }.trim()
+            val cleanArtist = cleanArtistName(artist)
+            val cleanTitle = cleanSongTitle(title)
             val encArtist = urlEncoded(cleanArtist)
             val encTitle = urlEncoded(cleanTitle)
             val encQuery = urlEncoded("$cleanArtist $cleanTitle")
 
-            // Ordered attempts: strict -> lenient get -> search. 503 (busy) par retry.
-            val attempts = listOf(
-                "https://lrclib.net/api/get?artist_name=$encArtist&track_name=$encTitle&duration=$durationSeconds",
-                "https://lrclib.net/api/get?artist_name=$encArtist&track_name=$encTitle",
-                "https://lrclib.net/api/search?q=$encQuery",
-            )
-
-            for (url in attempts) {
-                val element = runCatching { requestWithRetry(url) }.getOrNull() ?: continue
-                val candidates = when (element) {
-                    is JsonArray -> element.toList()
-                    is JsonObject -> listOf(element)
-                    else -> emptyList()
-                }
-                for (item in candidates) {
-                    val obj = item as? JsonObject ?: continue
-                    val synced = (obj["syncedLyrics"] as? JsonPrimitive)?.contentOrNull
+            // 1. Strict GET with duration match
+            if (durationSeconds > 0) {
+                val strictUrl = "https://lrclib.net/api/get?artist_name=$encArtist&track_name=$encTitle&duration=$durationSeconds"
+                val strictEl = runCatching { request(strictUrl) }.getOrNull()
+                if (strictEl is JsonObject) {
+                    val synced = (strictEl["syncedLyrics"] as? JsonPrimitive)?.contentOrNull
                     if (!synced.isNullOrBlank()) {
                         val lines = parseLrc(synced)
                         if (lines.isNotEmpty()) return@withContext lines
                     }
                 }
             }
+
+            // 2. Lenient GET verified by duration
+            val lenientUrl = "https://lrclib.net/api/get?artist_name=$encArtist&track_name=$encTitle"
+            val lenientEl = runCatching { request(lenientUrl) }.getOrNull()
+            if (lenientEl is JsonObject) {
+                val candidateDur = (lenientEl["duration"] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull() ?: 0.0
+                val durDiff = if (durationSeconds > 0) kotlin.math.abs(candidateDur - durationSeconds) else 0.0
+                if (durDiff <= 6.0) {
+                    val synced = (lenientEl["syncedLyrics"] as? JsonPrimitive)?.contentOrNull
+                    if (!synced.isNullOrBlank()) {
+                        val lines = parseLrc(synced)
+                        if (lines.isNotEmpty()) return@withContext lines
+                    }
+                }
+            }
+
+            // 3. Search: sort candidates by closest duration to avoid live/remix mismatches
+            val searchUrl = "https://lrclib.net/api/search?q=$encQuery"
+            val searchEl = runCatching { request(searchUrl) }.getOrNull()
+            if (searchEl is JsonArray) {
+                val candidates = searchEl.mapNotNull { it as? JsonObject }
+                    .filter { obj ->
+                        val synced = (obj["syncedLyrics"] as? JsonPrimitive)?.contentOrNull
+                        !synced.isNullOrBlank()
+                    }
+
+                val bestCandidate = if (durationSeconds > 0) {
+                    candidates.minByOrNull { obj ->
+                        val dur = (obj["duration"] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull() ?: 0.0
+                        kotlin.math.abs(dur - durationSeconds)
+                    }
+                } else {
+                    candidates.firstOrNull()
+                }
+
+                if (bestCandidate != null) {
+                    val candDur = (bestCandidate["duration"] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull() ?: 0.0
+                    val durDiff = if (durationSeconds > 0) kotlin.math.abs(candDur - durationSeconds) else 0.0
+                    if (durDiff <= 8.0 || durationSeconds <= 0) {
+                        val synced = (bestCandidate["syncedLyrics"] as? JsonPrimitive)?.contentOrNull
+                        if (!synced.isNullOrBlank()) {
+                            val lines = parseLrc(synced)
+                            if (lines.isNotEmpty()) return@withContext lines
+                        }
+                    }
+                }
+            }
             null
         }
-
-    /** 503 (server busy) par ek retry, chhota backoff ke saath. */
-    private suspend fun requestWithRetry(url: String): JsonElement = try {
-        request(url)
-    } catch (t: IOException) {
-        if (t.message?.contains("503") == true) {
-            kotlinx.coroutines.delay(1200)
-            request(url)
-        } else {
-            throw t
-        }
-    }
 
     private fun request(url: String): JsonElement {
         val request = Request.Builder()

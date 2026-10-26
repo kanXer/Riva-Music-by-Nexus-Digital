@@ -25,8 +25,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudDone
+import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.ExitToApp
 import androidx.compose.material.icons.rounded.Language
+import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PersonOutline
 import androidx.compose.material3.AlertDialog
@@ -42,6 +44,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -67,6 +71,7 @@ import com.nexusdigital.rivamusic.R
 import com.nexusdigital.rivamusic.data.UserProfile
 import com.nexusdigital.rivamusic.theme.BgDeep
 import com.nexusdigital.rivamusic.theme.Coral
+import com.nexusdigital.rivamusic.theme.RivaIsDark
 import com.nexusdigital.rivamusic.theme.Ink
 import com.nexusdigital.rivamusic.theme.InkSoft
 import com.nexusdigital.rivamusic.theme.Lime
@@ -336,6 +341,10 @@ fun GuestNameInputDialog(
 @Composable
 fun ProfileBottomSheet(
     userProfile: UserProfile,
+    isDarkMode: Boolean = true,
+    selectedRegion: MusicRegion? = null,
+    selectedLanguages: Set<String> = emptySet(),
+    onToggleDarkMode: () -> Unit = {},
     onDismiss: () -> Unit,
     onGoogleSignIn: () -> Unit,
     onChangeLanguages: () -> Unit,
@@ -547,6 +556,53 @@ fun ProfileBottomSheet(
                 Spacer(Modifier.height(12.dp))
             }
 
+            // Appearance Settings: Dark Mode Toggle
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(PanelElevated)
+                    .border(1.dp, PanelBorder, RoundedCornerShape(16.dp))
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = if (isDarkMode) Icons.Rounded.DarkMode else Icons.Rounded.LightMode,
+                        contentDescription = null,
+                        tint = Lime,
+                        modifier = Modifier.size(22.dp),
+                    )
+                    Spacer(Modifier.width(14.dp))
+                    Column {
+                        Text(
+                            text = "Appearance",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = TextPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = if (isDarkMode) "Dark Theme" else "Light Theme",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextSecondary,
+                        )
+                    }
+                }
+                Switch(
+                    checked = isDarkMode,
+                    onCheckedChange = { onToggleDarkMode() },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Ink,
+                        checkedTrackColor = Lime,
+                        uncheckedThumbColor = TextFaint,
+                        uncheckedTrackColor = Panel,
+                    ),
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+
             // Quick Actions: Change Languages
             Row(
                 modifier = Modifier
@@ -575,10 +631,19 @@ fun ProfileBottomSheet(
                         color = TextPrimary,
                         fontWeight = FontWeight.SemiBold,
                     )
+                    val langDesc = if (selectedLanguages.isNotEmpty() && selectedRegion != null) {
+                        "${selectedRegion.flag} ${selectedRegion.name} • ${selectedLanguages.joinToString(", ")}"
+                    } else if (selectedLanguages.isNotEmpty()) {
+                        selectedLanguages.joinToString(", ")
+                    } else {
+                        "Customize trending songs & home recommendations"
+                    }
                     Text(
-                        text = "Customize trending songs & home recommendations",
+                        text = langDesc,
                         style = MaterialTheme.typography.labelSmall,
                         color = TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
@@ -593,21 +658,22 @@ fun ProfileBottomSheet(
                     .height(50.dp),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Coral.copy(alpha = 0.18f),
-                    contentColor = Coral,
+                    containerColor = if (RivaIsDark) Coral.copy(alpha = 0.18f) else Color(0xFFFEE2E2),
+                    contentColor = if (RivaIsDark) Coral else Color(0xFFB91C1C),
                 ),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         Icons.Rounded.ExitToApp,
                         contentDescription = null,
-                        tint = Coral,
+                        tint = if (RivaIsDark) Coral else Color(0xFFB91C1C),
                         modifier = Modifier.size(18.dp),
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
                         text = if (userProfile.isGuest) "Switch Account / Sign In" else "Sign Out",
                         fontWeight = FontWeight.Bold,
+                        color = if (RivaIsDark) Coral else Color(0xFFB91C1C),
                     )
                 }
             }

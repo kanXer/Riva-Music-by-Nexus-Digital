@@ -7,7 +7,7 @@ import androidx.compose.ui.graphics.Color
  * IMPORTANT: getters (`get()`) use hote hain — warna class-load par hi
  * single value freeze ho jati hai aur theme switch par app badalta nahi!
  */
-var RivaIsDark: Boolean = true
+var RivaIsDark: Boolean = false
 
 val Ink get() = Color(if (RivaIsDark) 0xFF140A0A.toInt() else 0xFFEFE2DC.toInt())
 val InkSoft get() = Color(if (RivaIsDark) 0xFF1C0E0D.toInt() else 0xFFE9DAD3.toInt())
@@ -16,12 +16,12 @@ val PanelElevated get() = Color(if (RivaIsDark) 0xFF331A18.toInt() else 0xFFFFF6
 val PanelBorder get() = Color(if (RivaIsDark) 0xFF4C2723.toInt() else 0xFFDCC2BA.toInt())
 val Lime get() = Color(if (RivaIsDark) 0xFFFF6B52.toInt() else 0xFFE8503A.toInt())
 val LimeDeep get() = Color(if (RivaIsDark) 0xFFE04F35.toInt() else 0xFFC63F2B.toInt())
-val Coral get() = Color(if (RivaIsDark) 0xFFFFAB91.toInt() else 0xFFFFA98F.toInt())
-val Sky get() = Color(if (RivaIsDark) 0xFFFF8A80.toInt() else 0xFFF2958B.toInt())
-val Violet get() = Color(if (RivaIsDark) 0xFFF87171.toInt() else 0xFFD24C4C.toInt())
-val TextPrimary get() = Color(if (RivaIsDark) 0xFFFDF6F4.toInt() else 0xFF2B1512.toInt())
-val TextSecondary get() = Color(if (RivaIsDark) 0xFFC7A8A3.toInt() else 0xFF6E5350.toInt())
-val TextFaint get() = Color(if (RivaIsDark) 0xFF96726D.toInt() else 0xFFA08884.toInt())
+val Coral get() = Color(if (RivaIsDark) 0xFFFFAB91.toInt() else 0xFFDC2626.toInt())
+val Sky get() = Color(if (RivaIsDark) 0xFFFF8A80.toInt() else 0xFFB91C1C.toInt())
+val Violet get() = Color(if (RivaIsDark) 0xFFF87171.toInt() else 0xFF991B1B.toInt())
+val TextPrimary get() = Color(if (RivaIsDark) 0xFFFDF6F4.toInt() else 0xFF170908.toInt())
+val TextSecondary get() = Color(if (RivaIsDark) 0xFFC7A8A3.toInt() else 0xFF4A3430.toInt())
+val TextFaint get() = Color(if (RivaIsDark) 0xFF96726D.toInt() else 0xFF6D4D48.toInt())
 val Danger get() = Color(if (RivaIsDark) 0xFFFF3B3B.toInt() else 0xFFE63B3B.toInt())
 
 // Gradient wrappers.

@@ -230,6 +230,61 @@ class InnerTubeClient(
         )
     }
 
+    suspend fun fetchRadioTracks(videoId: String, limit: Int = 50): List<Track> = withContext(Dispatchers.IO) {
+        val body = buildJsonObject {
+            put("context", musicRemixContext())
+            put("playlistId", JsonPrimitive("RDAMVM$videoId"))
+            put("videoId", JsonPrimitive(videoId))
+        }
+
+        val root = try {
+            json.parseToJsonElement(execute(musicRequest("next", body)))
+        } catch (e: Exception) {
+            return@withContext emptyList()
+        }
+
+        val out = mutableListOf<Track>()
+        val seen = mutableSetOf<String>()
+
+        fun visit(element: JsonElement) {
+            when (element) {
+                is JsonObject -> {
+                    element["playlistPanelVideoRenderer"]?.asObjectOrNull()?.let { renderer ->
+                        val vid = renderer["videoId"].asStringOrNull()?.takeIf { it.isNotBlank() }
+                        val title = renderer["title"].asTextRuns()?.takeIf { it.isNotBlank() }
+                        val artist = renderer["longBylineText"].asTextRuns()
+                            ?: renderer["shortBylineText"].asTextRuns()
+                            ?: "YouTube Music"
+                        val durText = renderer["lengthText"].asTextRuns()
+                        val duration = parseDuration(durText)
+                        val thumb = renderer["thumbnail"].asObjectOrNull()
+                            ?.get("thumbnails").asArrayOrNull()
+                            ?.lastOrNull().asObjectOrNull()
+                            ?.get("url").asStringOrNull()
+
+                        if (vid != null && title != null && isRealSong(title, duration)) {
+                            if (seen.add(vid)) {
+                                out += Track(
+                                    id = vid,
+                                    title = title,
+                                    artist = artist,
+                                    durationSeconds = duration,
+                                    thumbnailUrl = upgradeThumbnailQuality(thumb),
+                                )
+                            }
+                        }
+                    }
+                    element.values.forEach(::visit)
+                }
+                is JsonArray -> element.forEach(::visit)
+                else -> Unit
+            }
+        }
+
+        visit(root)
+        out.take(limit)
+    }
+
     private fun musicRequest(path: String, body: JsonObject): Request =
         Request.Builder()
             .url("$MUSIC_BASE/youtubei/v1/$path?prettyPrint=false")
@@ -409,8 +464,8 @@ class InnerTubeClient(
         )
     }
 
-    private fun JsonObject.thumbnailUrl(): String? =
-        this["thumbnail"].asObjectOrNull()
+    private fun JsonObject.thumbnailUrl(): String? {
+        val raw = this["thumbnail"].asObjectOrNull()
             ?.get("musicThumbnailRenderer").asObjectOrNull()
             ?.get("thumbnail").asObjectOrNull()
             ?.get("thumbnails").asArrayOrNull()
@@ -420,6 +475,8 @@ class InnerTubeClient(
                 ?.get("thumbnails").asArrayOrNull()
                 ?.lastOrNull().asObjectOrNull()
                 ?.get("url").asStringOrNull()
+        return upgradeThumbnailQuality(raw)
+    }
 
     private fun JsonObject.watchVideoId(): String? =
         this["overlay"].asObjectOrNull()
@@ -842,7 +899,7 @@ class InnerTubeClient(
             title = title,
             artist = artist,
             durationSeconds = duration,
-            thumbnailUrl = thumb,
+            thumbnailUrl = upgradeThumbnailQuality(thumb),
         )
     }
 
@@ -882,7 +939,7 @@ class InnerTubeClient(
             title = title,
             artist = artist,
             durationSeconds = duration.coerceAtLeast(0),
-            thumbnailUrl = thumb,
+            thumbnailUrl = upgradeThumbnailQuality(thumb),
         )
     }
 
@@ -917,7 +974,7 @@ class InnerTubeClient(
             title = title,
             artist = artist,
             durationSeconds = 0,
-            thumbnailUrl = thumb,
+            thumbnailUrl = upgradeThumbnailQuality(thumb),
         )
     }
 

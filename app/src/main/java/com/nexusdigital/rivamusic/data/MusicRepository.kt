@@ -11,6 +11,7 @@ class MusicRepository(
     private val lyricsCache = ConcurrentHashMap<String, LyricsResult>()
     private val timedLyricsCache = ConcurrentHashMap<String, List<LyricLine>>()
     private val lrc = LrcLibClient()
+    private val betterLyrics = BetterLyricsClient()
 
     suspend fun search(query: String, limit: Int = 20): List<Track> {
         val clean = query.trim()
@@ -44,15 +45,34 @@ class MusicRepository(
         return fresh
     }
 
-    /** Time-synced (LRCLIB LRC). Null = synced nahi mila -> plain fallback. */
+    suspend fun fetchRadioTracks(videoId: String, limit: Int = 50): List<Track> =
+        api.fetchRadioTracks(videoId, limit)
+
+    /** Time-synced lyrics: LRCLIB (LRC, sub-second fast) pahle, phir BetterLyrics (TTML). */
     suspend fun timedLyrics(track: Track): List<LyricLine>? {
         timedLyricsCache[track.id]?.let { return it }
-        val result = runCatching { lrc.searchSynced(track.artist, track.title, track.durationSeconds) }
-        val found = result.getOrNull()?.takeIf { it.size > 2 }
-        if (found != null) {
-            timedLyricsCache[track.id] = found
+
+        // 1. LRCLIB (LRC format) — blazing fast sub-second synced response
+        val lrcResult = runCatching {
+            lrc.searchSynced(track.artist, track.title, track.durationSeconds)
+        }.getOrNull()?.takeIf { it.size > 2 }
+
+        if (lrcResult != null) {
+            timedLyricsCache[track.id] = lrcResult
+            return lrcResult
         }
-        return found
+
+        // 2. BetterLyrics (syllable/word-synced TTML) fallback
+        val blResult = runCatching {
+            betterLyrics.fetchSynced(track.artist, track.title, track.durationSeconds)
+        }.getOrNull()?.takeIf { it.size > 2 }
+
+        if (blResult != null) {
+            timedLyricsCache[track.id] = blResult
+            return blResult
+        }
+
+        return null
     }
 
     suspend fun resolveAudio(track: Track): StreamResolution = withContext(Dispatchers.IO) {

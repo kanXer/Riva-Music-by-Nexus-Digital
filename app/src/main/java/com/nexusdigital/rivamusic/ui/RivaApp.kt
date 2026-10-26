@@ -8,15 +8,31 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInRoot
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.common.api.ApiException
 import com.nexusdigital.rivamusic.data.UserProfile
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.ui.graphics.graphicsLayer
+import com.nexusdigital.rivamusic.data.upgradeThumbnailQuality
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -41,6 +57,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
@@ -50,6 +67,7 @@ import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.RepeatOne
 import androidx.compose.material.icons.rounded.Search
@@ -57,6 +75,11 @@ import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.Timer
+import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.rounded.LightMode
+import androidx.compose.material.icons.rounded.Fullscreen
+import androidx.compose.material.icons.rounded.Radio
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -107,6 +130,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.border
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.nexusdigital.rivamusic.RivaViewModel
@@ -166,6 +191,11 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
     val lyricsNow by viewModel.lyrics.collectAsStateWithLifecycle()
     val currentUser by viewModel.currentUser.collectAsStateWithLifecycle()
     val showAuthPrompt by viewModel.showAuthPrompt.collectAsStateWithLifecycle()
+    val isDarkMode by viewModel.isDarkMode.collectAsStateWithLifecycle()
+    val similarTracks by viewModel.similarTracks.collectAsStateWithLifecycle()
+    val isLoadingSimilar by viewModel.isLoadingSimilar.collectAsStateWithLifecycle()
+    var showSimilarSheet by rememberSaveable { mutableStateOf(false) }
+    var isFullScreen by rememberSaveable { mutableStateOf(false) }
 
     // "Saved offline" only counts manual saves; 30-day auto caches still show
     // the promote (⬇) option until permanently saved.
@@ -234,7 +264,7 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
     // Back pe pehle top-most dialog/sheet/player band karo, phir Home tab
     // par jao. Home par back hi app exit karega.
     BackHandler(
-        enabled = showProfileSheet || showLanguagePrompt || showSleepTimer || showCreatePlaylist ||
+        enabled = isFullScreen || showSimilarSheet || showProfileSheet || showLanguagePrompt || showSleepTimer || showCreatePlaylist ||
             showImportPlaylist || playlistTrackToAdd != null || showPlayer ||
             showAllPlaylists || showOfflineSheet || showCachedSheet ||
             showRecentSheet || showTrendingSheet || showLikedSheet ||
@@ -242,6 +272,8 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
             searchCollection != null || isOpeningCollection || selectedTab != 0,
     ) {
         when {
+            isFullScreen -> isFullScreen = false
+            showSimilarSheet -> showSimilarSheet = false
             showProfileSheet -> showProfileSheet = false
             showLanguagePrompt -> viewModel.dismissLanguageSelector()
             showSleepTimer -> showSleepTimer = false
@@ -283,11 +315,11 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
         }
     }
 
-    // System dark/light switch par PURA UI re-read karo — warna skipped
-    // composables purane theme colors dikhate rehte hain.
+    // Appearance theme toggle par pura UI re-render karo
     val systemDark = isSystemInDarkTheme()
-    key(systemDark) {
-        if (currentUser == null) {
+    key(isDarkMode) {
+        RivaMusicTheme(darkTheme = isDarkMode) {
+            if (currentUser == null) {
             WelcomeAuthScreen(
                 onGoogleSignInClick = { triggerGoogleSignIn() },
                 onGuestSignInSubmit = { name ->
@@ -426,7 +458,17 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
     }
 
     val sheetTrack = currentTrack
-    if (showPlayer) {
+    AnimatedVisibility(
+        visible = showPlayer,
+        enter = slideInVertically(
+            initialOffsetY = { it },
+            animationSpec = tween(220, easing = FastOutSlowInEasing)
+        ) + fadeIn(tween(160)),
+        exit = slideOutVertically(
+            targetOffsetY = { it },
+            animationSpec = tween(200, easing = FastOutSlowInEasing)
+        ) + fadeOut(tween(140)),
+    ) {
         if (sheetTrack != null) {
             PlayerSheet(
                 track = sheetTrack,
@@ -440,6 +482,16 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
                 repeatMode = repeatMode,
                 sleepTimerMinutes = sleepTimerMinutes,
                 sleepRemainingSeconds = sleepRemainingSeconds,
+                canSeek = true,
+                canRotateDisk = currentUser?.isGuest == false,
+                isDarkMode = isDarkMode,
+                onToggleDarkMode = viewModel::toggleDarkMode,
+                onOpenSimilarTracks = { tr ->
+                    viewModel.loadSimilarTracks(tr)
+                    showSimilarSheet = true
+                },
+                onOpenFullScreen = { isFullScreen = true },
+                onRestrictedAction = { msg -> viewModel.postMessage(msg) },
                 onDismiss = { showPlayer = false },
                 onSearch = {
                     showPlayer = false
@@ -470,6 +522,37 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
                 },
             )
         }
+    }
+
+    if (showSimilarSheet && sheetTrack != null) {
+        SimilarTracksSheet(
+            parentTrack = sheetTrack,
+            tracks = similarTracks,
+            isLoading = isLoadingSimilar,
+            currentTrackId = sheetTrack.id,
+            onDismiss = { showSimilarSheet = false },
+            onPlayTrack = { tr, list ->
+                viewModel.playTrack(tr, list)
+            },
+        )
+    }
+
+    if (isFullScreen && sheetTrack != null) {
+        FullScreenPlayerOverlay(
+            track = sheetTrack,
+            isPlaying = playerState.isPlaying,
+            positionMs = playerState.positionMs,
+            durationMs = playerState.durationMs.takeIf { it > 0L } ?: sheetTrack.durationMs,
+            lyrics = lyricsNow[sheetTrack.id],
+            canSeek = true,
+            canRotateDisk = currentUser?.isGuest == false,
+            onSeek = viewModel::seekTo,
+            onRestrictedAction = { msg -> viewModel.postMessage(msg) },
+            onTogglePlayPause = viewModel::togglePlayPause,
+            onNext = viewModel::playNext,
+            onPrevious = viewModel::playPrevious,
+            onDismiss = { isFullScreen = false },
+        )
     }
 
     if (showLanguagePrompt) {
@@ -853,6 +936,10 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
     if (showProfileSheet && currentUser != null) {
         ProfileBottomSheet(
             userProfile = currentUser!!,
+            isDarkMode = isDarkMode,
+            selectedRegion = selectedRegion,
+            selectedLanguages = selectedLanguages,
+            onToggleDarkMode = viewModel::toggleDarkMode,
             onDismiss = { showProfileSheet = false },
             onGoogleSignIn = {
                 showProfileSheet = false
@@ -879,6 +966,7 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
     }
         }
     }
+    }
 }
 
 @Composable
@@ -891,8 +979,8 @@ private fun RivaBottomBar(selectedTab: Int, onSelect: (Int) -> Unit) {
             selectedIconColor = Ink,
             selectedTextColor = Lime,
             indicatorColor = Lime,
-            unselectedIconColor = TextFaint,
-            unselectedTextColor = TextFaint,
+            unselectedIconColor = if (RivaIsDark) TextFaint else TextSecondary,
+            unselectedTextColor = if (RivaIsDark) TextFaint else TextSecondary,
         )
         NavigationBarItem(
             selected = selectedTab == 0,
@@ -989,6 +1077,58 @@ private fun MiniPlayer(
     }
 }
 
+private fun Modifier.playerSwipeGesture(
+    thresholdPx: Float,
+    getThumbnailBounds: () -> Rect,
+    onNext: () -> Unit,
+    onPrevious: () -> Unit,
+    onDismiss: () -> Unit,
+): Modifier = pointerInput(onNext, onPrevious, onDismiss) {
+    awaitEachGesture {
+        val down = awaitFirstDown(pass = PointerEventPass.Initial)
+        val bounds = getThumbnailBounds()
+        // If the touch started inside the thumbnail / vinyl disk area:
+        // Do NOT intercept; allow rotary dragging / spinning
+        if (bounds.width > 0f && bounds.contains(down.position)) {
+            return@awaitEachGesture
+        }
+
+        val isHeaderTouch = down.position.y < 260f
+
+        var totalDragY = 0f
+        var totalDragX = 0f
+        var hasTriggered = false
+        while (true) {
+            val event = awaitPointerEvent(pass = PointerEventPass.Initial)
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            if (!change.pressed) break
+
+            val deltaY = change.position.y - change.previousPosition.y
+            val deltaX = change.position.x - change.previousPosition.x
+            totalDragY += deltaY
+            totalDragX += deltaX
+
+            if (!hasTriggered && kotlin.math.abs(totalDragY) > kotlin.math.abs(totalDragX) * 1.25f) {
+                if (totalDragY <= -thresholdPx) {
+                    hasTriggered = true
+                    change.consume()
+                    onNext()
+                    break
+                } else if (totalDragY >= thresholdPx) {
+                    hasTriggered = true
+                    change.consume()
+                    if (isHeaderTouch) {
+                        onDismiss()
+                    } else {
+                        onPrevious()
+                    }
+                    break
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PlayerSheet(
@@ -1003,6 +1143,13 @@ private fun PlayerSheet(
     repeatMode: RepeatMode,
     sleepTimerMinutes: Int?,
     sleepRemainingSeconds: Long,
+    canSeek: Boolean = true,
+    canRotateDisk: Boolean = true,
+    isDarkMode: Boolean = true,
+    onToggleDarkMode: () -> Unit = {},
+    onOpenSimilarTracks: (Track) -> Unit = {},
+    onOpenFullScreen: () -> Unit = {},
+    onRestrictedAction: (String) -> Unit = {},
     onDismiss: () -> Unit,
     onSearch: () -> Unit,
     onToggle: () -> Unit,
@@ -1021,119 +1168,30 @@ private fun PlayerSheet(
     onToggleLike: (Track) -> Unit,
     onCancelSleepTimer: () -> Unit,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val context = LocalContext.current
     val durationMs = state.durationMs.takeIf { it > 0L } ?: track.durationMs
-    val isDownloaded = downloadedIds.contains(track.id)
-    val downloadStatus = downloadStatuses[track.id]
+    val swipeThreshold = with(LocalDensity.current) { 64.dp.toPx() }
+    var thumbnailBounds by remember { mutableStateOf(Rect.Zero) }
+    var showLyrics by remember { mutableStateOf(false) }
 
-    val isSingleRepeat = repeatMode == RepeatMode.ONE
-    val pagerPages = if (isSingleRepeat) {
-        listOf(track, track, track)
-    } else {
-        queue.ifEmpty { listOf(track) }
+    LaunchedEffect(track.id, showLyrics) {
+        if (showLyrics) {
+            onLyrics(track)
+        }
     }
-    val pagerState = androidx.compose.foundation.pager.rememberPagerState(
-        initialPage = if (isSingleRepeat) 1 else pagerPages.indexOfFirst { it.id == track.id }.coerceAtLeast(0),
-        pageCount = { pagerPages.size },
-    )
 
-    val coroutineScope = rememberCoroutineScope()
+    var slideDirection by remember { mutableIntStateOf(1) } // 1: next / up, -1: prev / down
+    val handleNext = {
+        slideDirection = 1
+        onNext()
+    }
+    val handlePrevious = {
+        slideDirection = -1
+        onPrevious()
+    }
 
-    // Player khulne pe single-track ho to related chain prefetch (swipe ready).
     LaunchedEffect(Unit) { onViewOpened() }
 
-    // Follow external track changes (auto next, notification, open from list).
-    LaunchedEffect(track.id, isSingleRepeat, pagerPages.size) {
-        if (isSingleRepeat) {
-            if (pagerState.currentPage != 1 && !pagerState.isScrollInProgress) {
-                pagerState.scrollToPage(1)
-            }
-        } else {
-            val target = pagerPages.indexOfFirst { it.id == track.id }
-            if (target >= 0 && target != pagerState.currentPage) {
-                if (pagerState.currentPage == pagerPages.lastIndex && target == 0) {
-                    pagerState.animateScrollToPage(0)
-                } else if (pagerState.currentPage == 0 && target == pagerPages.lastIndex) {
-                    pagerState.animateScrollToPage(pagerPages.lastIndex)
-                } else if (!pagerState.isScrollInProgress) {
-                    pagerState.scrollToPage(target)
-                }
-            }
-        }
-    }
-    // Swipe settle -> INDEX based play (agar single repeat ho to same song replay).
-    LaunchedEffect(track.id, isSingleRepeat, pagerPages) {
-        if (isSingleRepeat) {
-            snapshotFlow { pagerState.settledPage }.collect { page ->
-                if (page != 1) {
-                    onPlayPage(1)
-                    pagerState.scrollToPage(1)
-                }
-            }
-        } else {
-            snapshotFlow { pagerState.settledPage }.collect { page ->
-                val pageTrack = pagerPages.getOrNull(page) ?: return@collect
-                if (pageTrack.id != track.id) {
-                    onPlayPage(page)
-                }
-            }
-        }
-    }
-
-    val loopScrollConnection = remember(pagerState, pagerPages.size, repeatMode) {
-        object : NestedScrollConnection {
-            override fun onPostScroll(
-                consumed: Offset,
-                available: Offset,
-                source: NestedScrollSource,
-            ): Offset {
-                if (available.y < -35f && repeatMode == RepeatMode.ALL && pagerPages.size > 1) {
-                    if (pagerState.currentPage == pagerPages.lastIndex) {
-                        coroutineScope.launch {
-                            onPlayPage(0)
-                            pagerState.animateScrollToPage(0)
-                        }
-                        return available
-                    }
-                } else if (available.y > 35f && repeatMode == RepeatMode.ALL && pagerPages.size > 1) {
-                    if (pagerState.currentPage == 0) {
-                        coroutineScope.launch {
-                            val lastIdx = pagerPages.lastIndex
-                            onPlayPage(lastIdx)
-                            pagerState.animateScrollToPage(lastIdx)
-                        }
-                        return available
-                    }
-                }
-                return Offset.Zero
-            }
-
-            override suspend fun onPostFling(
-                consumed: Velocity,
-                available: Velocity,
-            ): Velocity {
-                if (available.y < -150f && repeatMode == RepeatMode.ALL && pagerPages.size > 1) {
-                    if (pagerState.currentPage == pagerPages.lastIndex) {
-                        onPlayPage(0)
-                        pagerState.animateScrollToPage(0)
-                        return available
-                    }
-                } else if (available.y > 150f && repeatMode == RepeatMode.ALL && pagerPages.size > 1) {
-                    if (pagerState.currentPage == 0) {
-                        val lastIdx = pagerPages.lastIndex
-                        onPlayPage(lastIdx)
-                        pagerState.animateScrollToPage(lastIdx)
-                        return available
-                    }
-                }
-                return Velocity.Zero
-            }
-        }
-    }
-
-    // Full-screen reel: pager POORI screen cover karta hai AUR har cheez page
-    // ke andar hai — art, slider, play/pause, next/prev, sab swipe ke saath
-    // slide karte hain (controls upar jate hain reel transition ke saath).
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -1141,329 +1199,441 @@ private fun PlayerSheet(
                 Brush.verticalGradient(
                     listOf(PlayerTop, PlayerMid, Ink),
                 ),
+            )
+            .playerSwipeGesture(
+                thresholdPx = swipeThreshold,
+                getThumbnailBounds = { thumbnailBounds },
+                onNext = handleNext,
+                onPrevious = handlePrevious,
+                onDismiss = onDismiss,
             ),
     ) {
-        androidx.compose.foundation.pager.VerticalPager(
-            state = pagerState,
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .nestedScroll(loopScrollConnection),
-        ) { page ->
-            val pageTrack = pagerPages.getOrNull(page) ?: track
-            Column(
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            // Header bar
+            Row(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
-                    .padding(horizontal = 20.dp, vertical = 4.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    IconButton(onClick = onDismiss) {
-                        Icon(
-                            Icons.Rounded.KeyboardArrowDown,
-                            contentDescription = "Close player",
-                            tint = TextPrimary,
+                AppleGlassButton(
+                    icon = Icons.Rounded.KeyboardArrowDown,
+                    contentDescription = "Close player",
+                    onClick = onDismiss,
+                    size = 42.dp,
+                    iconSize = 24.dp,
+                )
+                Text(
+                    text = "NOW PLAYING",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextFaint,
+                    textAlign = TextAlign.Center,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.2.sp,
+                    modifier = Modifier.weight(1f),
+                )
+                AppleGlassButton(
+                    icon = Icons.Rounded.Search,
+                    contentDescription = "Search",
+                    onClick = onSearch,
+                    size = 42.dp,
+                    iconSize = 22.dp,
+                )
+            }
+
+            // Animated Center & Bottom Presentation (Entire Card Slides Up / Down on Track Change)
+            AnimatedContent(
+                targetState = track,
+                contentKey = { it.id },
+                transitionSpec = {
+                    if (slideDirection >= 0) {
+                        // Next song: out goes UP (-height), in comes from BOTTOM (+height)
+                        (slideInVertically(
+                            animationSpec = tween(340, easing = FastOutSlowInEasing),
+                            initialOffsetY = { height -> height }
+                        ) + fadeIn(tween(240))).togetherWith(
+                            slideOutVertically(
+                                animationSpec = tween(340, easing = FastOutSlowInEasing),
+                                targetOffsetY = { height -> -height }
+                            ) + fadeOut(tween(200))
+                        )
+                    } else {
+                        // Previous song: out goes DOWN (+height), in comes from TOP (-height)
+                        (slideInVertically(
+                            animationSpec = tween(340, easing = FastOutSlowInEasing),
+                            initialOffsetY = { height -> -height }
+                        ) + fadeIn(tween(240))).togetherWith(
+                            slideOutVertically(
+                                animationSpec = tween(340, easing = FastOutSlowInEasing),
+                                targetOffsetY = { height -> height }
+                            ) + fadeOut(tween(200))
                         )
                     }
-                    Text(
-                        text = "NOW PLAYING",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = TextFaint,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.weight(1f),
-                    )
-                    IconButton(onClick = onSearch) {
-                        Icon(
-                            Icons.Rounded.Search,
-                            contentDescription = "Search",
-                            tint = TextPrimary,
-                        )
-                    }
-                }
+                },
+                label = "FullSongTransition",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+            ) { pageTrack ->
+                val trackDurationMs = if (pageTrack.id == track.id) durationMs else pageTrack.durationMs
+                val trackPositionMs = if (pageTrack.id == track.id) state.positionMs else 0L
+                val isTrackPlaying = state.isPlaying && pageTrack.id == track.id
+
                 Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(top = 4.dp),
+                    modifier = Modifier.fillMaxSize(),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
                 ) {
-                    // Artwork pe tap -> lyrics; phir tap -> wapas artwork.
-                    var showLyrics by remember(pageTrack.id) { mutableStateOf(false) }
-                    val lyric = lyrics[pageTrack.id]
-                    Box(
+                    // Equal gap above disk from top bar
+                    Spacer(Modifier.weight(1f))
+
+                    // Center Content: Vinyl Disk OR Realtime Synced Lyrics
+                    AnimatedContent(
+                        targetState = showLyrics,
+                        transitionSpec = {
+                            (fadeIn(tween(260)) + scaleIn(tween(260), initialScale = 0.94f)).togetherWith(
+                                fadeOut(tween(200)) + scaleOut(tween(200), targetScale = 0.94f)
+                            )
+                        },
+                        label = "DiskLyricsToggle",
                         modifier = Modifier
-                            .weight(1f, fill = false)
-                            .fillMaxWidth(0.78f)
+                            .weight(8f, fill = false)
+                            .fillMaxWidth(0.85f)
                             .aspectRatio(1f, matchHeightConstraintsFirst = true)
-                            .clickable {
-                                if (!showLyrics) onLyrics(pageTrack)
-                                showLyrics = !showLyrics
+                            .onGloballyPositioned { coordinates ->
+                                thumbnailBounds = coordinates.boundsInRoot()
                             },
-                    ) {
-                        if (showLyrics && lyric != null) {
-                            when {
-                                lyric.synced && lyric.syncedLines.isNotEmpty() -> {
-                                    // REALTIME synced: position ke saath line
-                                    // highlight + auto-scroll (YTM jaisa).
-                                    val listState = rememberLazyListState()
-                                    val activeIndex = lyric.syncedLines.count {
-                                        it.startMs <= state.positionMs + 350L
-                                    } - 1
-                                    LaunchedEffect(activeIndex) {
-                                        if (activeIndex > 2) {
-                                            listState.animateScrollToItem(activeIndex - 3)
-                                        }
-                                    }
-                                    androidx.compose.foundation.lazy.LazyColumn(
-                                        state = listState,
-                                        modifier = Modifier.fillMaxSize(),
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        verticalArrangement = Arrangement.Center,
-                                    ) {
-                                        items(lyric.syncedLines.size) { index ->
-                                            val line = lyric.syncedLines[index]
-                                            val isActive = index == activeIndex
-                                            val isPast = index < activeIndex
-                                            Text(
-                                                text = line.text,
-                                                style = MaterialTheme.typography.titleMedium,
-                                                color = when {
-                                                    isActive -> Lime
-                                                    isPast -> TextFaint
-                                                    else -> TextSecondary
-                                                },
-                                                textAlign = TextAlign.Center,
-                                                modifier = Modifier.padding(vertical = 9.dp),
-                                            )
-                                        }
-                                    }
-                                    Text(
-                                        text = "LYRICS",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = TextFaint,
-                                        modifier = Modifier
-                                            .align(Alignment.TopEnd)
-                                            .padding(8.dp),
-                                    )
-                                }
-                                lyric.loading -> Column(
+                    ) { lyricsMode ->
+                        if (!lyricsMode) {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                VinylDiskPlayer(
+                                    thumbnailUrl = pageTrack.thumbnailUrl,
+                                    isPlaying = isTrackPlaying,
+                                    canSeek = canRotateDisk,
+                                    positionMs = trackPositionMs,
+                                    durationMs = trackDurationMs,
+                                    onSeek = onSeek,
+                                    onRestrictedAction = onRestrictedAction,
+                                    onThumbnailClick = {
+                                        showLyrics = true
+                                        onLyrics(pageTrack)
+                                    },
                                     modifier = Modifier.fillMaxSize(),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center,
-                                ) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(30.dp),
-                                        color = Lime,
-                                    )
-                                }
-                                lyric.failed || (!lyric.synced && lyric.lines.isEmpty()) -> Column(
-                                    modifier = Modifier.fillMaxSize(),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center,
-                                ) {
-                                    Text(
-                                        text = "Lyrics nahi mile is gaane ke liye",
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        color = TextFaint,
-                                    )
-                                }
-                                else -> Column(
+                                )
+                            }
+                        } else {
+                            // Realtime Synced Lyrics Card
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(RoundedCornerShape(24.dp))
+                                    .background(if (RivaIsDark) Color.White.copy(alpha = 0.05f) else PanelElevated)
+                                    .border(1.dp, if (RivaIsDark) Color.White.copy(alpha = 0.12f) else PanelBorder, RoundedCornerShape(24.dp))
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                // Top header inside Lyrics card
+                                Row(
                                     modifier = Modifier
-                                        .fillMaxSize()
-                                        .verticalScroll(rememberScrollState()),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center,
+                                        .fillMaxWidth()
+                                        .padding(bottom = 6.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    lyric.lines.forEachIndexed { index, line ->
-                                        Text(
-                                            text = line.ifBlank { " " },
-                                            style = MaterialTheme.typography.titleMedium,
-                                            color = if (index % 2 == 0) TextPrimary else TextSecondary,
-                                            textAlign = TextAlign.Center,
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier
+                                            .clip(CircleShape)
+                                            .background(if (RivaIsDark) Color.White.copy(alpha = 0.08f) else PanelBorder)
+                                            .clickable { showLyrics = false }
+                                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .clip(CircleShape)
+                                                .background(Lime),
                                         )
-                                        Spacer(Modifier.height(10.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            text = "REALTIME LYRICS",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = TextPrimary,
+                                            fontWeight = FontWeight.Bold,
+                                            letterSpacing = 1.sp,
+                                        )
                                     }
-                                    Text(
-                                        text = "LYRICS",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = TextFaint,
-                                        modifier = Modifier.padding(top = 8.dp),
+
+                                    // Switch back to Vinyl Disk button
+                                    AppleGlassButton(
+                                        icon = Icons.Rounded.Close,
+                                        contentDescription = "Show Vinyl Disk",
+                                        onClick = { showLyrics = false },
+                                        size = 32.dp,
+                                        iconSize = 18.dp,
+                                    )
+                                }
+
+                                // Synced / Plain Lyrics View
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    SyncedLyricsView(
+                                        lyrics = lyrics[pageTrack.id],
+                                        positionMs = trackPositionMs,
+                                        canSeek = canSeek,
+                                        onSeek = onSeek,
+                                        onRestrictedAction = onRestrictedAction,
+                                        modifier = Modifier.fillMaxSize(),
                                     )
                                 }
                             }
-                        } else {
-                            TrackArtwork(
-                                url = pageTrack.thumbnailUrl,
-                                modifier = Modifier.fillMaxSize(),
-                                corner = 30.dp,
-                            )
                         }
                     }
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        text = pageTrack.title,
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = TextPrimary,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = pageTrack.artist,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = TextSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Row(
+
+                    // Equal gap below disk to bottom components
+                    Spacer(Modifier.weight(1f))
+
+                    // Below Disk: Title, Gap, Singer, Actions, Mode Controls, Slider, Transport
+                    Column(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        DownloadAction(
-                            track = pageTrack,
-                            status = downloadStatuses[pageTrack.id],
-                            downloaded = downloadedIds.contains(pageTrack.id),
-                            onDownload = { onDownloadTrack(pageTrack) },
+                        Text(
+                            text = pageTrack.title,
+                            style = MaterialTheme.typography.titleLarge,
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
                         )
-                        Spacer(Modifier.width(6.dp))
-                        IconButton(onClick = { onToggleLike(pageTrack) }, modifier = Modifier.size(40.dp)) {
+                        Spacer(Modifier.height(8.dp)) // Noticeable gap between title & singer
+                        Text(
+                            text = pageTrack.artist,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
+                        )
+                        Spacer(Modifier.height(8.dp))
+
+                        // Apple Music glassy action buttons row
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(CircleShape)
+                                .background(if (RivaIsDark) Color.White.copy(alpha = 0.06f) else PanelElevated)
+                                .border(1.dp, if (RivaIsDark) Color.White.copy(alpha = 0.12f) else PanelBorder, CircleShape)
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            // 50 Similar Tracks Button
+                            AppleGlassButton(
+                                icon = Icons.Rounded.Radio,
+                                contentDescription = "50 Similar Tracks",
+                                onClick = { onOpenSimilarTracks(pageTrack) },
+                                badgeText = "50",
+                                size = 38.dp,
+                                iconSize = 19.dp,
+                                tint = Lime,
+                            )
+
+                            // Like Button
                             val isLiked = likedIds.contains(pageTrack.id)
-                            Icon(
-                                imageVector = if (isLiked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                                contentDescription = if (isLiked) {
-                                    "Remove from Liked songs"
-                                } else {
-                                    "Add to Liked songs"
-                                },
+                            AppleGlassButton(
+                                icon = if (isLiked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                contentDescription = if (isLiked) "Unlike" else "Like",
+                                onClick = { onToggleLike(pageTrack) },
                                 tint = if (isLiked) Coral else TextPrimary,
+                                size = 38.dp,
+                                iconSize = 19.dp,
                             )
-                        }
-                        Spacer(Modifier.width(6.dp))
-                        IconButton(onClick = { onAddToPlaylist() }, modifier = Modifier.size(40.dp)) {
-                            Icon(
-                                Icons.AutoMirrored.Rounded.PlaylistAdd,
+
+                            // Download Button
+                            DownloadAction(
+                                track = pageTrack,
+                                status = downloadStatuses[pageTrack.id],
+                                downloaded = downloadedIds.contains(pageTrack.id),
+                                onDownload = { onDownloadTrack(pageTrack) },
+                            )
+
+                            // Add to Playlist Button
+                            AppleGlassButton(
+                                icon = Icons.AutoMirrored.Rounded.PlaylistAdd,
                                 contentDescription = "Add to playlist",
-                                tint = TextPrimary,
+                                onClick = onAddToPlaylist,
+                                size = 38.dp,
+                                iconSize = 19.dp,
+                            )
+
+                            // Appearance Toggle (Dark/Light mode)
+                            AppleGlassButton(
+                                icon = if (isDarkMode) Icons.Rounded.LightMode else Icons.Rounded.DarkMode,
+                                contentDescription = "Toggle Appearance",
+                                onClick = onToggleDarkMode,
+                                size = 38.dp,
+                                iconSize = 19.dp,
+                            )
+
+                            // Fullscreen Button
+                            AppleGlassButton(
+                                icon = Icons.Rounded.Fullscreen,
+                                contentDescription = "Fullscreen",
+                                onClick = onOpenFullScreen,
+                                size = 38.dp,
+                                iconSize = 20.dp,
                             )
                         }
-                    }
-                }
 
-                // Controls page ke andar hi — swipe pe pura page (controls
-                // samet) angdaal hoke slide hota hai.
-                PlayerSliderSection(
-                    positionMs = state.positionMs,
-                    durationMs = durationMs,
-                    onSeek = onSeek,
-                )
+                        Spacer(Modifier.height(10.dp))
 
-                Spacer(Modifier.height(4.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    IconButton(onClick = onPrevious, modifier = Modifier.size(48.dp)) {
-                        Icon(
-                            Icons.Rounded.SkipPrevious,
-                            contentDescription = "Previous",
-                            tint = TextPrimary,
-                            modifier = Modifier.size(30.dp),
-                        )
-                    }
-                    Box(
-                        modifier = Modifier
-                            .size(64.dp)
-                            .clip(CircleShape)
-                            .background(Lime)
-                            .clickable(enabled = !isResolving, onClick = onToggle),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        if (isResolving) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(24.dp),
-                                color = Ink,
-                                strokeWidth = 2.5.dp,
+                        // Mode Controls Row: Shuffle, Repeat, Sleep Timer (ABOVE Progress bar!)
+                        Row(
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(if (RivaIsDark) Color.White.copy(alpha = 0.06f) else PanelElevated)
+                                .border(1.dp, if (RivaIsDark) Color.White.copy(alpha = 0.12f) else PanelBorder, CircleShape)
+                                .padding(horizontal = 8.dp, vertical = 2.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            ModeControl(
+                                icon = Icons.Rounded.Shuffle,
+                                label = if (shuffleEnabled) "Shuffle on" else "Shuffle",
+                                active = shuffleEnabled,
+                                onClick = onToggleShuffle,
                             )
-                        } else {
-                            Icon(
-                                imageVector = if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                contentDescription = if (state.isPlaying) "Pause" else "Play",
-                                tint = Ink,
-                                modifier = Modifier.size(34.dp),
+                            Spacer(Modifier.width(6.dp))
+                            ModeControl(
+                                icon = if (repeatMode == RepeatMode.ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,
+                                label = when (repeatMode) {
+                                    RepeatMode.OFF -> "Repeat"
+                                    RepeatMode.ALL -> "Repeat all"
+                                    RepeatMode.ONE -> "Repeat one"
+                                },
+                                active = repeatMode != RepeatMode.OFF,
+                                onClick = onCycleRepeat,
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            ModeControl(
+                                icon = Icons.Rounded.Timer,
+                                label = sleepTimerMinutes?.let { "Sleep ${formatDuration(sleepRemainingSeconds * 1000L)}" } ?: "Sleep",
+                                active = sleepTimerMinutes != null,
+                                onClick = onSleepTimer,
                             )
                         }
-                    }
-                    IconButton(onClick = onNext, modifier = Modifier.size(48.dp)) {
-                        Icon(
-                            Icons.Rounded.SkipNext,
-                            contentDescription = "Next",
-                            tint = TextPrimary,
-                            modifier = Modifier.size(30.dp),
+
+                        Spacer(Modifier.height(4.dp))
+
+                        // Progress bar & seek slider
+                        PlayerSliderSection(
+                            positionMs = trackPositionMs,
+                            durationMs = trackDurationMs,
+                            canSeek = canSeek,
+                            onSeek = onSeek,
+                            onRestrictedAction = onRestrictedAction,
                         )
+
+                        Spacer(Modifier.height(4.dp))
+
+                        // Transport buttons (Previous, Play/Pause, Next)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            AppleGlassButton(
+                                icon = Icons.Rounded.SkipPrevious,
+                                contentDescription = "Previous",
+                                onClick = handlePrevious,
+                                size = 48.dp,
+                                iconSize = 26.dp,
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(62.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        Brush.radialGradient(
+                                            listOf(Lime, Color(0xFF94D82D))
+                                        )
+                                    )
+                                    .border(2.dp, Color.White.copy(alpha = 0.35f), CircleShape)
+                                    .clickable(
+                                        enabled = !isResolving,
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null,
+                                        onClick = onToggle,
+                                    ),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                if (isResolving) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(24.dp),
+                                        color = Ink,
+                                        strokeWidth = 2.5.dp,
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = if (isTrackPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                        contentDescription = if (isTrackPlaying) "Pause" else "Play",
+                                        tint = Ink,
+                                        modifier = Modifier.size(34.dp),
+                                    )
+                                }
+                            }
+                            AppleGlassButton(
+                                icon = Icons.Rounded.SkipNext,
+                                contentDescription = "Next",
+                                onClick = handleNext,
+                                size = 48.dp,
+                                iconSize = 26.dp,
+                            )
+                        }
+
+                        if (sleepTimerMinutes != null) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = "Sleep timer: ${formatDuration(sleepRemainingSeconds * 1000L)} left • tap to cancel",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Lime,
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null,
+                                        onClick = onCancelSleepTimer,
+                                    )
+                                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                            )
+                        }
+
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            text = "Riva Music by Nexus Digital",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (RivaIsDark) Violet.copy(alpha = 0.85f) else TextSecondary,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(bottom = 6.dp),
+                        )
+                        Spacer(Modifier.height(6.dp))
                     }
                 }
-
-                Spacer(Modifier.height(6.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ModeControl(
-                        icon = Icons.Rounded.Shuffle,
-                        label = if (shuffleEnabled) "Shuffle on" else "Shuffle",
-                        active = shuffleEnabled,
-                        onClick = onToggleShuffle,
-                    )
-                    Spacer(Modifier.width(16.dp))
-                    ModeControl(
-                        icon = if (repeatMode == RepeatMode.ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,
-                        label = when (repeatMode) {
-                            RepeatMode.OFF -> "Repeat"
-                            RepeatMode.ALL -> "Repeat all"
-                            RepeatMode.ONE -> "Repeat one"
-                        },
-                        active = repeatMode != RepeatMode.OFF,
-                        onClick = onCycleRepeat,
-                    )
-                    Spacer(Modifier.width(16.dp))
-                    ModeControl(
-                        icon = Icons.Rounded.Timer,
-                        label = sleepTimerMinutes?.let { "Sleep ${formatDuration(sleepRemainingSeconds * 1000L)}" } ?: "Sleep timer",
-                        active = sleepTimerMinutes != null,
-                        onClick = onSleepTimer,
-                    )
-                }
-
-                if (sleepTimerMinutes != null) {
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        text = "Sleep timer: ${formatDuration(sleepRemainingSeconds * 1000L)} left • tap to cancel",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Lime,
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .clickable(onClick = onCancelSleepTimer)
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                    )
-                }
-
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = "Riva Music by Nexus Digital",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Violet.copy(alpha = 0.85f),
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(bottom = 2.dp),
-                )
             }
         }
     }
@@ -1479,15 +1649,25 @@ private fun ModeControl(
     Row(
         modifier = Modifier
             .clip(CircleShape)
+            .background(
+                if (active) Lime.copy(alpha = 0.2f)
+                else Color.White.copy(alpha = 0.05f)
+            )
+            .border(
+                1.dp,
+                if (active) Lime.copy(alpha = 0.45f)
+                else Color.White.copy(alpha = 0.08f),
+                CircleShape
+            )
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 7.dp),
+            .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             imageVector = icon,
             contentDescription = label,
             tint = if (active) Lime else TextFaint,
-            modifier = Modifier.size(18.dp),
+            modifier = Modifier.size(17.dp),
         )
         Spacer(Modifier.width(5.dp))
         Text(
@@ -1566,7 +1746,9 @@ private fun SleepTimerDialog(
 private fun PlayerSliderSection(
     positionMs: Long,
     durationMs: Long,
+    canSeek: Boolean = true,
     onSeek: (Long) -> Unit,
+    onRestrictedAction: (String) -> Unit = {},
 ) {
     var sliderValue by remember(durationMs) { mutableFloatStateOf(0f) }
     var dragging by remember { mutableStateOf(false) }
@@ -1584,50 +1766,77 @@ private fun PlayerSliderSection(
             .fillMaxWidth()
             .padding(horizontal = 4.dp),
     ) {
-        Slider(
-            value = sliderValue,
-            onValueChange = {
-                dragging = true
-                sliderValue = it
-            },
-            onValueChangeFinished = {
-                dragging = false
-                onSeek(sliderValue.toLong())
-            },
-            valueRange = 0f..maxVal,
-            thumb = {
-                Box(
-                    modifier = Modifier
-                        .size(if (dragging) 16.dp else 12.dp)
-                        .clip(CircleShape)
-                        .background(Lime),
-                )
-            },
-            track = { sliderState ->
-                SliderDefaults.Track(
-                    sliderState = sliderState,
-                    modifier = Modifier.height(5.dp),
-                    colors = SliderDefaults.colors(
-                        activeTrackColor = Lime,
-                        inactiveTrackColor = PanelBorder.copy(alpha = 0.5f),
-                    ),
-                    drawStopIndicator = null,
-                    thumbTrackGapSize = 0.dp,
-                )
-            },
-            colors = SliderDefaults.colors(
-                thumbColor = Lime,
-                activeTrackColor = Lime,
-                inactiveTrackColor = PanelBorder.copy(alpha = 0.5f),
-            ),
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(26.dp),
-        )
+            contentAlignment = Alignment.Center,
+        ) {
+            Slider(
+                value = sliderValue,
+                onValueChange = {
+                    if (canSeek) {
+                        dragging = true
+                        sliderValue = it
+                    }
+                },
+                onValueChangeFinished = {
+                    if (canSeek) {
+                        dragging = false
+                        onSeek(sliderValue.toLong())
+                    }
+                },
+                valueRange = 0f..maxVal,
+                enabled = canSeek,
+                thumb = {
+                    Box(
+                        modifier = Modifier
+                            .size(if (dragging) 16.dp else 12.dp)
+                            .clip(CircleShape)
+                            .background(if (canSeek) Lime else TextFaint),
+                    )
+                },
+                track = { sliderState ->
+                    SliderDefaults.Track(
+                        sliderState = sliderState,
+                        modifier = Modifier.height(5.dp),
+                        colors = SliderDefaults.colors(
+                            activeTrackColor = if (canSeek) Lime else TextFaint,
+                            inactiveTrackColor = PanelBorder.copy(alpha = 0.5f),
+                            disabledActiveTrackColor = TextFaint.copy(alpha = 0.5f),
+                            disabledInactiveTrackColor = PanelBorder.copy(alpha = 0.3f),
+                        ),
+                        drawStopIndicator = null,
+                        thumbTrackGapSize = 0.dp,
+                    )
+                },
+                colors = SliderDefaults.colors(
+                    thumbColor = if (canSeek) Lime else TextFaint,
+                    activeTrackColor = if (canSeek) Lime else TextFaint,
+                    inactiveTrackColor = PanelBorder.copy(alpha = 0.5f),
+                    disabledThumbColor = TextFaint,
+                    disabledActiveTrackColor = TextFaint.copy(alpha = 0.5f),
+                    disabledInactiveTrackColor = PanelBorder.copy(alpha = 0.3f),
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(26.dp),
+            )
+            if (!canSeek) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable {
+                            onRestrictedAction("Sign in with Google to seek music! 🔒 Guest users listen to full song.")
+                        }
+                )
+            }
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 text = formatDuration(sliderValue.toLong()),
@@ -1635,6 +1844,16 @@ private fun PlayerSliderSection(
                 color = TextSecondary,
                 fontWeight = FontWeight.Medium,
             )
+            if (!canSeek) {
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = "🔒 Seeking locked (Sign in to unlock)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Coral,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp,
+                )
+            }
             Spacer(Modifier.weight(1f))
             Text(
                 text = formatDuration(durationMs),
@@ -1736,7 +1955,7 @@ private fun PlayerLoadingSheet(
             Text(
                 text = "Riva Music by Nexus Digital",
                 style = MaterialTheme.typography.labelSmall,
-                color = Violet.copy(alpha = 0.85f),
+                color = if (RivaIsDark) Violet.copy(alpha = 0.85f) else TextSecondary,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(bottom = 6.dp),
             )

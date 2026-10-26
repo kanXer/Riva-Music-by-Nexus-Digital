@@ -88,4 +88,37 @@ class FirestoreSyncRepository {
             emptyList()
         }
     }
+
+    suspend fun saveUserPreferences(uid: String, regionCode: String, languages: Set<String>): Boolean {
+        if (uid.isBlank() || uid.startsWith("guest")) return false
+        return try {
+            val docRef = firestore.collection("users").document(uid)
+            val data = hashMapOf(
+                "region" to regionCode,
+                "languages" to languages.toList(),
+                "updatedAt" to System.currentTimeMillis(),
+            )
+            docRef.set(data, SetOptions.merge()).await()
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun fetchUserPreferences(uid: String): Pair<String, Set<String>>? {
+        if (uid.isBlank() || uid.startsWith("guest")) return null
+        return try {
+            val doc = firestore.collection("users").document(uid).get().await()
+            if (doc.exists()) {
+                val region = doc.getString("region") ?: "IN"
+                val langsList = (doc.get("languages") as? List<*>)?.mapNotNull { it?.toString() }
+                val langs = langsList?.toSet()?.takeIf { it.isNotEmpty() } ?: setOf("Hindi")
+                Pair(region, langs)
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
 }

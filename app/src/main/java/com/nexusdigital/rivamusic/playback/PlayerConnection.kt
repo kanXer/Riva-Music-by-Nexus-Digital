@@ -48,6 +48,7 @@ sealed interface PlaybackEvent {
     data object Ended : PlaybackEvent
     data object SkipNext : PlaybackEvent
     data object SkipPrevious : PlaybackEvent
+    data object Stop : PlaybackEvent
     data class Error(val message: String) : PlaybackEvent
 }
 
@@ -68,10 +69,23 @@ class PlayerConnection(context: Context) {
     private var controller: MediaController? = null
     private var ticker: Job? = null
     private var pendingPlay: Pair<Uri, Track>? = null
+    private var pendingSeekTarget: Long? = null
+    private var lastSeekTimestamp: Long = 0L
 
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
             sync(player)
+        }
+
+        override fun onPositionDiscontinuity(
+            oldPosition: Player.PositionInfo,
+            newPosition: Player.PositionInfo,
+            reason: Int,
+        ) {
+            if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                pendingSeekTarget = null
+            }
+            controller?.let(::sync)
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -149,8 +163,11 @@ class PlayerConnection(context: Context) {
     }
 
     fun seekTo(positionMs: Long) {
-        controller?.seekTo(positionMs.coerceAtLeast(0L))
-        controller?.let(::sync)
+        val target = positionMs.coerceAtLeast(0L)
+        pendingSeekTarget = target
+        lastSeekTimestamp = System.currentTimeMillis()
+        _state.update { it.copy(positionMs = target) }
+        controller?.seekTo(target)
     }
 
     fun replay() {
@@ -195,7 +212,8 @@ class PlayerConnection(context: Context) {
         ticker = scope.launch {
             while (true) {
                 controller?.let(::sync)
-                delay(500)
+                val isPlaying = controller?.isPlaying == true
+                delay(if (isPlaying) 100L else 500L)
             }
         }
     }
@@ -214,6 +232,18 @@ class PlayerConnection(context: Context) {
                 else -> PlaybackPhase.IDLE
             }
 
+            val currentPos = c.currentPosition.coerceAtLeast(0L)
+            val effectivePos = if (pendingSeekTarget != null) {
+                if (System.currentTimeMillis() - lastSeekTimestamp < 1500L && kotlin.math.abs(currentPos - pendingSeekTarget!!) > 2000L) {
+                    pendingSeekTarget!!
+                } else {
+                    pendingSeekTarget = null
+                    currentPos
+                }
+            } else {
+                currentPos
+            }
+
             _state.value = PlayerUiState(
                 connected = true,
                 isPlaying = c.isPlaying,
@@ -224,7 +254,7 @@ class PlayerConnection(context: Context) {
                 artist = metadata?.artist?.toString().orEmpty(),
                 artworkUrl = metadata?.artworkUri?.toString(),
                 durationMs = duration,
-                positionMs = c.currentPosition.coerceAtLeast(0L),
+                positionMs = effectivePos,
                 bufferedMs = c.bufferedPosition.coerceAtLeast(0L),
                 hasMedia = item != null,
             )

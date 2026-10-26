@@ -1,5 +1,15 @@
 package com.nexusdigital.rivamusic.ui
 
+import android.app.Activity
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.speech.RecognizerIntent
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -100,6 +110,57 @@ fun SearchScreen(
     onOpenItem: (SearchItem) -> Unit,
 ) {
     val focusManager = LocalFocusManager.current
+    val context = LocalContext.current
+
+    val speechLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val spokenText = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+            if (!spokenText.isNullOrBlank()) {
+                onQueryChange(spokenText)
+                onSubmit(spokenText)
+            }
+        }
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to search songs or artists...")
+            }
+            try {
+                speechLauncher.launch(intent)
+            } catch (e: Exception) {
+                Toast.makeText(context, "Voice search is not supported on this device", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            Toast.makeText(context, "Microphone permission is required for voice search", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val launchVoiceSearch = {
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            android.Manifest.permission.RECORD_AUDIO,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to search songs or artists...")
+            }
+            try {
+                speechLauncher.launch(intent)
+            } catch (e: Exception) {
+                Toast.makeText(context, "Voice search is not supported on this device", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            permissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+        }
+    }
 
     val showRecommendations = filter == SearchFilter.SONGS
     val recommendedTracks = if (showRecommendations) {
@@ -164,12 +225,22 @@ fun SearchScreen(
                     Icon(Icons.Rounded.Search, contentDescription = null, tint = Lime)
                 },
                 trailingIcon = {
-                    if (query.isNotBlank()) {
-                        IconButton(onClick = {
-                            onClear()
-                            focusManager.clearFocus()
-                        }) {
-                            Icon(Icons.Rounded.Close, contentDescription = "Clear search", tint = TextSecondary)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (query.isNotBlank()) {
+                            IconButton(onClick = {
+                                onClear()
+                                focusManager.clearFocus()
+                            }) {
+                                Icon(Icons.Rounded.Close, contentDescription = "Clear search", tint = TextSecondary)
+                            }
+                        }
+                        IconButton(onClick = launchVoiceSearch) {
+                            Icon(
+                                Icons.Rounded.Mic,
+                                contentDescription = "Voice Search",
+                                tint = Lime,
+                                modifier = Modifier.size(22.dp),
+                            )
                         }
                     }
                 },

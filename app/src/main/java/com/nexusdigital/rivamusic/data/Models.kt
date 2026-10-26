@@ -13,6 +13,26 @@ data class Track(
 ) {
     val durationMs: Long get() = durationSeconds * 1000L
     val isDownloaded: Boolean get() = !localPath.isNullOrBlank()
+    val highResThumbnailUrl: String? get() = upgradeThumbnailQuality(thumbnailUrl)
+}
+
+fun upgradeThumbnailQuality(url: String?): String? {
+    if (url.isNullOrBlank()) return null
+    var clean = url
+    // Google User Content (YouTube Music high-res album art: 800x800 crisp quality)
+    if (clean.contains("googleusercontent.com") || clean.contains("ggpht.com")) {
+        clean = clean.replace(Regex("=w\\d+-h\\d+[^&?]*"), "=w800-h800-l90-rj")
+            .replace(Regex("=s\\d+[^&?]*"), "=s800-l90-rj")
+    }
+    // YouTube video thumbnails: upgrade to standard definition or high resolution
+    if (clean.contains("i.ytimg.com") || clean.contains("img.youtube.com")) {
+        clean = clean.replace("/hqdefault.jpg", "/sddefault.jpg")
+            .replace("/mqdefault.jpg", "/sddefault.jpg")
+            .replace("/default.jpg", "/sddefault.jpg")
+            .replace(Regex("=w\\d+-h\\d+[^&?]*"), "=w800-h800")
+            .replace(Regex("=s\\d+[^&?]*"), "=s800")
+    }
+    return clean
 }
 
 @Serializable
@@ -75,3 +95,38 @@ data class LyricLine(
     val startMs: Long,
     val text: String,
 )
+
+/**
+ * Cleans YouTube track titles to remove noise like "Official Video", "| Aashiqui 2",
+ * "ft. ...", parentheses, so lyrics providers (LRCLIB / BetterLyrics) find exact matches fast.
+ */
+fun cleanSongTitle(title: String): String {
+    var clean = title
+        .replace(Regex("\\(.*?\\)"), " ")
+        .replace(Regex("\\[.*?\\]"), " ")
+        .split('|')[0]
+        .split('-')[0]
+        .split('–')[0]
+        .split('—')[0]
+        .split(Regex("(?i)\\b(feat\\.|feat|ft\\.|ft)\\b"))[0]
+        .replace(Regex("(?i)\\b(official|lyrics?|video|audio|full song|hd|4k)\\b.*"), "")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+    return clean.ifBlank { title.trim() }
+}
+
+/**
+ * Cleans YouTube artist strings by removing "Topic", "VEVO", parentheses, extra featured artists.
+ */
+fun cleanArtistName(artist: String): String {
+    var clean = artist
+        .replace(Regex("\\(.*?\\)"), " ")
+        .replace(Regex("\\[.*?\\]"), " ")
+        .split(',')[0]
+        .split('&')[0]
+        .split(Regex("(?i)\\b(feat\\.|feat|ft\\.|ft)\\b"))[0]
+        .replace(Regex("(?i)\\b(topic|vevo|official)\\b"), "")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+    return clean.ifBlank { artist.trim() }
+}

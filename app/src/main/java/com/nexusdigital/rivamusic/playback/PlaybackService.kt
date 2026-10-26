@@ -41,6 +41,14 @@ class PlaybackService : MediaSessionService() {
         .setCustomIconResId(R.drawable.ic_notif_close)
         .build()
 
+    private val outputSpeakerCommand = SessionCommand(ACTION_OUTPUT_SPEAKER, Bundle.EMPTY)
+    private val outputSpeakerButton = CommandButton.Builder()
+        .setDisplayName("Output")
+        .setSessionCommand(outputSpeakerCommand)
+        .setIconResId(R.drawable.ic_notif_speaker)
+        .setCustomIconResId(R.drawable.ic_notif_speaker)
+        .build()
+
     private val nextCommand = SessionCommand(ACTION_NEXT, Bundle.EMPTY)
     private val nextButton = CommandButton.Builder()
         .setDisplayName("Next")
@@ -64,12 +72,20 @@ class PlaybackService : MediaSessionService() {
         ): MediaSession.ConnectionResult {
             val sessionCommands = SessionCommands.Builder()
                 .add(closeCommand)
+                .add(outputSpeakerCommand)
                 .add(nextCommand)
                 .add(prevCommand)
                 .build()
 
             val playerCommands = Player.Commands.Builder()
                 .addAll(session.player.availableCommands)
+                .add(Player.COMMAND_PLAY_PAUSE)
+                .add(Player.COMMAND_PREPARE)
+                .add(Player.COMMAND_STOP)
+                .add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
+                .add(Player.COMMAND_SEEK_TO_MEDIA_ITEM)
+                .add(Player.COMMAND_SEEK_BACK)
+                .add(Player.COMMAND_SEEK_FORWARD)
                 .add(Player.COMMAND_SEEK_TO_NEXT)
                 .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
                 .add(Player.COMMAND_SEEK_TO_PREVIOUS)
@@ -79,7 +95,7 @@ class PlaybackService : MediaSessionService() {
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(sessionCommands)
                 .setAvailablePlayerCommands(playerCommands)
-                .setCustomLayout(ImmutableList.of(prevButton, nextButton, closeButton))
+                .setCustomLayout(ImmutableList.of(closeButton, outputSpeakerButton))
                 .build()
         }
 
@@ -112,6 +128,12 @@ class PlaybackService : MediaSessionService() {
             when (customCommand.customAction) {
                 ACTION_CLOSE -> {
                     closePlayback()
+                    return com.google.common.util.concurrent.Futures.immediateFuture(
+                        SessionResult(SessionResult.RESULT_SUCCESS),
+                    )
+                }
+                ACTION_OUTPUT_SPEAKER -> {
+                    openMediaOutputSwitcher()
                     return com.google.common.util.concurrent.Futures.immediateFuture(
                         SessionResult(SessionResult.RESULT_SUCCESS),
                     )
@@ -199,7 +221,7 @@ class PlaybackService : MediaSessionService() {
         mediaSession = MediaSession.Builder(this, forwardingPlayer)
             .setSessionActivity(sessionActivity)
             .setCallback(sessionCallback)
-            .setCustomLayout(ImmutableList.of(prevButton, nextButton, closeButton))
+            .setCustomLayout(ImmutableList.of(closeButton, outputSpeakerButton))
             .build()
     }
 
@@ -222,21 +244,52 @@ class PlaybackService : MediaSessionService() {
         super.onDestroy()
     }
 
+    private fun openMediaOutputSwitcher() {
+        openMediaOutputSwitcher(this)
+    }
+
     private fun closePlayback() {
+        playbackEventListener?.invoke(PlaybackEvent.Stop)
         mediaSession?.let { session ->
             val player = session.player
             player.stop()
             player.clearMediaItems()
         }
         stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     companion object {
         const val USER_AGENT =
             "com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip"
         const val ACTION_CLOSE = "com.nexusdigital.rivamusic.ACTION_CLOSE"
+        const val ACTION_OUTPUT_SPEAKER = "com.nexusdigital.rivamusic.ACTION_OUTPUT_SPEAKER"
         const val ACTION_NEXT = "com.nexusdigital.rivamusic.ACTION_NEXT"
         const val ACTION_PREV = "com.nexusdigital.rivamusic.ACTION_PREV"
+
+        fun openMediaOutputSwitcher(context: Context) {
+            try {
+                val panelIntent = Intent("com.android.settings.panel.action.MEDIA_OUTPUT").apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    putExtra("com.android.settings.panel.extra.PACKAGE_NAME", context.packageName)
+                }
+                context.startActivity(panelIntent)
+            } catch (e: Exception) {
+                try {
+                    val soundIntent = Intent(android.provider.Settings.ACTION_SOUND_SETTINGS).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    context.startActivity(soundIntent)
+                } catch (ignored: Exception) {
+                    try {
+                        val btIntent = Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        context.startActivity(btIntent)
+                    } catch (ignored2: Exception) {}
+                }
+            }
+        }
 
         var playbackEventListener: ((PlaybackEvent) -> Unit)? = null
 
@@ -259,6 +312,13 @@ class PlaybackService : MediaSessionService() {
 private class RivaForwardingPlayer(player: Player) : androidx.media3.common.ForwardingPlayer(player) {
     override fun getAvailableCommands(): Player.Commands {
         return super.getAvailableCommands().buildUpon()
+            .add(Player.COMMAND_PLAY_PAUSE)
+            .add(Player.COMMAND_PREPARE)
+            .add(Player.COMMAND_STOP)
+            .add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
+            .add(Player.COMMAND_SEEK_TO_MEDIA_ITEM)
+            .add(Player.COMMAND_SEEK_BACK)
+            .add(Player.COMMAND_SEEK_FORWARD)
             .add(Player.COMMAND_SEEK_TO_NEXT)
             .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
             .add(Player.COMMAND_SEEK_TO_PREVIOUS)
@@ -268,12 +328,27 @@ private class RivaForwardingPlayer(player: Player) : androidx.media3.common.Forw
 
     override fun isCommandAvailable(command: Int): Boolean {
         return when (command) {
+            Player.COMMAND_PLAY_PAUSE,
+            Player.COMMAND_PREPARE,
+            Player.COMMAND_STOP,
+            Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM,
+            Player.COMMAND_SEEK_TO_MEDIA_ITEM,
+            Player.COMMAND_SEEK_BACK,
+            Player.COMMAND_SEEK_FORWARD,
             Player.COMMAND_SEEK_TO_NEXT,
             Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
             Player.COMMAND_SEEK_TO_PREVIOUS,
             Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> true
             else -> super.isCommandAvailable(command)
         }
+    }
+
+    override fun seekTo(positionMs: Long) {
+        super.seekTo(positionMs)
+    }
+
+    override fun seekTo(mediaItemIndex: Int, positionMs: Long) {
+        super.seekTo(mediaItemIndex, positionMs)
     }
 
     override fun seekToNext() {
