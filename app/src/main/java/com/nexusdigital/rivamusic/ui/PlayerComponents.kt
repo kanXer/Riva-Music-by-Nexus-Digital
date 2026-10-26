@@ -3,8 +3,12 @@ package com.nexusdigital.rivamusic.ui
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.unit.isSpecified
 import androidx.compose.foundation.layout.BoxWithConstraints
 import kotlinx.coroutines.delay
 import android.content.Intent
@@ -772,44 +776,74 @@ fun SyncedLyricsView(
         var manualOffsetMs by remember(lyrics) { mutableLongStateOf(0L) }
         val effectiveMs = (positionMs + manualOffsetMs).coerceAtLeast(0L)
         val activeIndex = lyrics.syncedLines.indexOfLast { it.startMs <= effectiveMs }
+        val targetIndex = if (activeIndex >= 0) activeIndex else 0
 
-        var userIsScrolling by remember { mutableStateOf(false) }
+        // Only track real finger gestures via interactionSource — programmatic scrolling does NOT flag dragging!
+        val isDragged by listState.interactionSource.collectIsDraggedAsState()
+        var isUserDragging by remember { mutableStateOf(false) }
 
-        LaunchedEffect(listState.isScrollInProgress) {
-            if (listState.isScrollInProgress) {
-                userIsScrolling = true
+        LaunchedEffect(isDragged) {
+            if (isDragged) {
+                isUserDragging = true
             } else {
-                delay(2000L)
-                userIsScrolling = false
+                // Keep manual position for 2.5s after user finishes dragging before resuming auto-sync
+                delay(2500L)
+                isUserDragging = false
             }
         }
 
         // Exact Y-axis center tracking: keeps currently singing line dead in the vertical center of the card
-        LaunchedEffect(activeIndex, userIsScrolling) {
-            if (activeIndex >= 0 && !userIsScrolling) {
-                var visibleItem = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == activeIndex }
-                if (visibleItem == null) {
-                    listState.scrollToItem(activeIndex)
-                    delay(30L)
-                    visibleItem = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == activeIndex }
+        LaunchedEffect(targetIndex, isUserDragging) {
+            if (!isUserDragging && targetIndex in lyrics.syncedLines.indices) {
+                // Ensure viewport has completed initial layout pass
+                var waitCount = 0
+                while (listState.layoutInfo.viewportEndOffset <= 0 && waitCount < 25) {
+                    delay(16L)
+                    waitCount++
                 }
-                if (visibleItem != null) {
-                    val layoutInfo = listState.layoutInfo
-                    val viewportHeight = layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset
-                    if (viewportHeight > 0) {
-                        val viewportCenterY = viewportHeight / 2
-                        val itemCenterY = visibleItem.offset + visibleItem.size / 2
-                        val scrollDelta = itemCenterY - viewportCenterY
-                        if (kotlin.math.abs(scrollDelta) > 2) {
-                            listState.animateScrollBy(scrollDelta.toFloat())
+
+                val layoutInfo = listState.layoutInfo
+                val viewportHeight = layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset
+                if (viewportHeight <= 0) return@LaunchedEffect
+
+                val viewportCenterY = layoutInfo.viewportStartOffset + viewportHeight / 2
+                var visibleItem = layoutInfo.visibleItemsInfo.firstOrNull { it.index == targetIndex }
+
+                if (visibleItem == null) {
+                    // Non-visible item (e.g. initial open or big seek): jump directly and align to center immediately
+                    listState.scrollToItem(targetIndex)
+                    var frames = 0
+                    while (listState.layoutInfo.visibleItemsInfo.none { it.index == targetIndex } && frames < 10) {
+                        delay(16L)
+                        frames++
+                    }
+                    visibleItem = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == targetIndex }
+                    if (visibleItem != null) {
+                        val currentInfo = listState.layoutInfo
+                        val vHeight = currentInfo.viewportEndOffset - currentInfo.viewportStartOffset
+                        val vCenter = currentInfo.viewportStartOffset + vHeight / 2
+                        val iCenter = visibleItem.offset + visibleItem.size / 2
+                        val delta = iCenter - vCenter
+                        if (kotlin.math.abs(delta) > 2) {
+                            listState.scrollBy(delta.toFloat())
                         }
+                    }
+                } else {
+                    // Item already in viewport: smooth glide animation into dead center
+                    val itemCenterY = visibleItem.offset + visibleItem.size / 2
+                    val scrollDelta = itemCenterY - viewportCenterY
+                    if (kotlin.math.abs(scrollDelta) > 2) {
+                        listState.animateScrollBy(
+                            value = scrollDelta.toFloat(),
+                            animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
+                        )
                     }
                 }
             }
         }
 
         BoxWithConstraints(modifier = modifier.clipToBounds()) {
-            val centerPad = (maxHeight * 0.35f).coerceIn(80.dp, 160.dp)
+            val centerPad = if (maxHeight.isSpecified && maxHeight > 40.dp) maxHeight / 2 else 180.dp
 
             Column(
                 modifier = Modifier
@@ -919,7 +953,7 @@ private fun LyricLineRow(
     onRestrictedAction: (String) -> Unit,
 ) {
     val scale by animateFloatAsState(
-        targetValue = if (isActive) 1.06f else 0.96f,
+        targetValue = if (isActive) 1.08f else 0.95f,
         animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
         label = "LyricScale",
     )
@@ -927,18 +961,18 @@ private fun LyricLineRow(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = if (isActive) 4.dp else 2.dp)
+            .padding(horizontal = 8.dp, vertical = 3.dp)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
             }
             .clip(RoundedCornerShape(14.dp))
             .background(
-                if (isActive) Lime.copy(alpha = 0.14f) else Color.Transparent
+                if (isActive) Lime.copy(alpha = 0.16f) else Color.Transparent
             )
             .border(
                 width = if (isActive) 1.dp else 0.dp,
-                color = if (isActive) Lime.copy(alpha = 0.40f) else Color.Transparent,
+                color = if (isActive) Lime.copy(alpha = 0.45f) else Color.Transparent,
                 shape = RoundedCornerShape(14.dp),
             )
             .clickable(
@@ -951,19 +985,19 @@ private fun LyricLineRow(
                     onRestrictedAction("Sign in with Google to jump to lyric lines! 🔒")
                 }
             }
-            .padding(horizontal = 12.dp, vertical = if (isActive) 8.dp else 5.dp),
+            .padding(horizontal = 12.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = line.text,
-            style = if (isActive) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleMedium,
             color = when {
                 isActive -> Lime
-                distance == 1 -> TextPrimary.copy(alpha = 0.75f)
-                isPast -> TextFaint.copy(alpha = 0.35f)
-                else -> TextSecondary.copy(alpha = 0.50f)
+                distance == 1 -> TextPrimary.copy(alpha = 0.85f)
+                isPast -> TextFaint.copy(alpha = 0.40f)
+                else -> TextSecondary.copy(alpha = 0.60f)
             },
-            fontWeight = if (isActive) FontWeight.ExtraBold else FontWeight.Medium,
+            fontWeight = if (isActive) FontWeight.ExtraBold else FontWeight.SemiBold,
             textAlign = TextAlign.Center,
         )
     }
