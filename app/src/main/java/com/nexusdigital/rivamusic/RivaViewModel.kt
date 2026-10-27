@@ -26,6 +26,7 @@ import com.nexusdigital.rivamusic.data.SearchSuggestions
 import com.nexusdigital.rivamusic.data.StreamResolution
 import com.nexusdigital.rivamusic.data.Track
 import com.nexusdigital.rivamusic.data.UserProfile
+import com.nexusdigital.rivamusic.data.YouTubeSession
 import com.nexusdigital.rivamusic.playback.PlaybackEvent
 import com.nexusdigital.rivamusic.playback.PlaybackService
 import com.nexusdigital.rivamusic.playback.PlayerConnection
@@ -281,16 +282,6 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
                 if (query.isNotBlank()) performSearch(query, filter)
             }
         }
-        // Auto-cache all recently played tracks so everything in recent history is cached offline
-        viewModelScope.launch(Dispatchers.IO) {
-            recentRepo.recent.collect { list ->
-                list.forEach { tr ->
-                    if (!downloadsRepo.isDownloaded(tr.id)) {
-                        downloadsRepo.cacheTrackIfNeeded(tr, music)
-                    }
-                }
-            }
-        }
         viewModelScope.launch {
             player.events.collect { event ->
                 when (event) {
@@ -306,26 +297,64 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Track ids already retried via streaming fallback so we never loop. */
     private val streamedFallback = mutableSetOf<String>()
+    private val retriedOnlineTracks = mutableSetOf<String>()
 
     fun postMessage(msg: String) {
         _messages.tryEmit(msg)
     }
 
     private fun handlePlaybackError(message: String) {
-        _messages.tryEmit(message)
         val track = _currentTrack.value ?: return
-        val brokenLocal = track.localPath != null &&
-            (message.contains("Source error", ignoreCase = true) ||
+        val isSourceError = message.contains("Source error", ignoreCase = true) ||
+            message.contains("Response code: 403", ignoreCase = true) ||
+            message.contains("BehindLiveWindowException", ignoreCase = true) ||
+            message.contains("HttpDataSource", ignoreCase = true) ||
+            message.contains("Unable to connect", ignoreCase = true)
+
+        if (track.localPath != null) {
+            val brokenLocal = isSourceError ||
                 message.contains("FileNotFound", ignoreCase = true) ||
-                message.contains("not found", ignoreCase = true))
-        if (brokenLocal && streamedFallback.add(track.id)) {
-            // Stale offline copy (file gone) — drop entry and fall back to streaming.
-            viewModelScope.launch {
-                downloadsRepo.removeBrokenEntry(track.id)
-                _messages.tryEmit("Offline copy missing — streaming instead")
-                startTrack(track.copy(localPath = null))
+                message.contains("not found", ignoreCase = true)
+            if (brokenLocal && streamedFallback.add(track.id)) {
+                // Stale offline copy (file gone) — drop entry and fall back to streaming.
+                viewModelScope.launch {
+                    downloadsRepo.removeBrokenEntry(track.id)
+                    _messages.tryEmit("Offline copy missing — streaming instead")
+                    startTrack(track.copy(localPath = null))
+                }
+            } else {
+                _messages.tryEmit(message)
             }
+            return
         }
+
+        // Online streaming error recovery:
+        // Automatically refresh stream URL and seamlessly resume playback at current position
+        if (isSourceError && retriedOnlineTracks.add(track.id)) {
+            val currentPos = playerState.value.positionMs
+            viewModelScope.launch {
+                try {
+                    android.util.Log.d("RivaPlay", "Auto-refreshing stream for ${track.id} at pos $currentPos ms")
+                    music.clearStream(track.id)
+                    YouTubeSession.refresh(track.id)
+                    val fresh = music.resolveAudio(track)
+                    player.play(track, fresh.url)
+                    if (currentPos > 1000L) {
+                        player.seekTo(currentPos)
+                    }
+                } catch (t: Throwable) {
+                    android.util.Log.e("RivaPlay", "Auto-recovery failed for ${track.id}: ${t.message}")
+                    _messages.tryEmit("Playback error: ${t.message ?: message}")
+                    if (queue.value.size > 1) {
+                        delay(1000L)
+                        playNext()
+                    }
+                }
+            }
+            return
+        }
+
+        _messages.tryEmit(message)
     }
 
     fun loadHome(force: Boolean = false) {
@@ -1706,6 +1735,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun startTrack(track: Track) {
         resolveJob?.cancel()
+        retriedOnlineTracks.remove(track.id)
         _currentTrack.value = track
         _isResolving.value = true
 
@@ -1725,11 +1755,6 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     val resolution = music.resolveAudio(track)
                     player.play(track, resolution.url)
-                    // Auto-cache: defer download slightly so ExoPlayer can buffer smoothly without disk/network contention
-                    viewModelScope.launch(Dispatchers.IO) {
-                        delay(2500L)
-                        downloadsRepo.autoCache(track, resolution)
-                    }
                 }
                 recentRepo.add(track)
                 autoSkips = 0

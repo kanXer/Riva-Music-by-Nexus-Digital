@@ -777,11 +777,19 @@ class InnerTubeClient(
             break
         }
 
-        // Musify ka defence layer #4: direct fail → free proxy pool se try.
-        // resolveAudioInternal(videoId, proxyClient) se loop guard ke liye allowProxyFallback=false.
+        // Agar dono passes fail ho gaye to fresh YouTubeSession se direct IP par retry.
+        // (NOTE: Public HTTP proxy pool se nikli stream URL IP-bound hoti hai (&ip=PROXY_IP),
+        // jisse ExoPlayer direct play karne par HTTP 403 deta hai. Isliye fresh session best recovery hai).
         if (allowProxyFallback && proxyClient == null) {
-            val viaProxy = proxyManager.resolveViaProxy(videoId)
-            if (viaProxy != null) return@withContext viaProxy
+            val freshVd = YouTubeSession.refresh(videoId)
+            if (freshVd != null) {
+                for (client in playbackClients) {
+                    try {
+                        val resolution = requestPlayer(videoId, client, freshVd, null)
+                        if (resolution != null) return@withContext resolution
+                    } catch (_: Throwable) {}
+                }
+            }
         }
 
         throw IOException(

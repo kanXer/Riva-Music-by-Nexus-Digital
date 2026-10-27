@@ -19,6 +19,8 @@ import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -161,8 +163,8 @@ class PlaybackService : MediaSessionService() {
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
             .setUserAgent(USER_AGENT)
             .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(10_000)
-            .setReadTimeoutMs(20_000)
+            .setConnectTimeoutMs(15_000)
+            .setReadTimeoutMs(30_000)
             .setDefaultRequestProperties(
                 mapOf(
                     "User-Agent" to USER_AGENT,
@@ -182,19 +184,29 @@ class PlaybackService : MediaSessionService() {
             .setUpstreamDataSourceFactory(upstreamDataSourceFactory)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
 
-        // Ultra-fast playback startup: begins playback with 1s buffer
+        // Resilient playback load control: 50s buffer prevents underruns while streaming
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                12_000, // minBufferMs
-                45_000, // maxBufferMs
-                1_000,  // bufferForPlaybackMs (1s instead of 2.5s)
-                2_000,  // bufferForPlaybackAfterRebufferMs
+                50_000,  // minBufferMs (increased from 12s to 50s)
+                120_000, // maxBufferMs (up to 2 minutes)
+                1_500,   // bufferForPlaybackMs (1.5s fast start)
+                3_000,   // bufferForPlaybackAfterRebufferMs (3s rebuffer recovery)
             )
+            .setBackBuffer(30_000, true) // Retain 30s back buffer for instant reverse seek
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
+        val loadErrorHandlingPolicy = object : DefaultLoadErrorHandlingPolicy(5) {
+            override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorInfo): Long {
+                return 500L.coerceAtLeast(super.getRetryDelayMsFor(loadErrorInfo))
+            }
+        }
+
+        val mediaSourceFactory = DefaultMediaSourceFactory(cacheDataSourceFactory)
+            .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
+
         val player = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(cacheDataSourceFactory))
+            .setMediaSourceFactory(mediaSourceFactory)
             .setLoadControl(loadControl)
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -261,7 +273,7 @@ class PlaybackService : MediaSessionService() {
 
     companion object {
         const val USER_AGENT =
-            "com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip"
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
         const val ACTION_CLOSE = "com.nexusdigital.rivamusic.ACTION_CLOSE"
         const val ACTION_OUTPUT_SPEAKER = "com.nexusdigital.rivamusic.ACTION_OUTPUT_SPEAKER"
         const val ACTION_NEXT = "com.nexusdigital.rivamusic.ACTION_NEXT"

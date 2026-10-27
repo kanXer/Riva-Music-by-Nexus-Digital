@@ -71,7 +71,7 @@ data class StreamResolution(
     val itag: Int,
     val userAgent: String,
     val headers: Map<String, String>,
-    val expiresAt: Long = System.currentTimeMillis() + 3 * 60 * 60 * 1000L,
+    val expiresAt: Long = System.currentTimeMillis() + 30 * 60 * 1000L,
 )
 
 enum class PlaybackPhase {
