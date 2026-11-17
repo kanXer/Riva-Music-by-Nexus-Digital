@@ -204,6 +204,7 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
     }
     val similarTracks by viewModel.similarTracks.collectAsStateWithLifecycle()
     val isLoadingSimilar by viewModel.isLoadingSimilar.collectAsStateWithLifecycle()
+    val availableUpdate by viewModel.availableUpdate.collectAsStateWithLifecycle()
     var showSimilarSheet by rememberSaveable { mutableStateOf(false) }
     var isFullScreen by rememberSaveable { mutableStateOf(false) }
 
@@ -982,6 +983,15 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
                 viewModel.closeAuthPrompt()
                 triggerGoogleSignIn()
             },
+        )
+    }
+
+    val update = availableUpdate
+    if (update != null) {
+        UpdateDialog(
+            updateInfo = update,
+            onDismiss = { viewModel.dismissUpdate() },
+            onUpdateClick = { viewModel.dismissUpdate() }
         )
     }
         }

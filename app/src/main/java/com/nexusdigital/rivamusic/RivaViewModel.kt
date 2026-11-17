@@ -241,6 +241,25 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
     private val _isLoadingSimilar = MutableStateFlow(false)
     val isLoadingSimilar: StateFlow<Boolean> = _isLoadingSimilar.asStateFlow()
 
+    private val _availableUpdate = MutableStateFlow<com.nexusdigital.rivamusic.data.UpdateInfo?>(null)
+    val availableUpdate: StateFlow<com.nexusdigital.rivamusic.data.UpdateInfo?> = _availableUpdate.asStateFlow()
+
+    fun dismissUpdate() {
+        _availableUpdate.value = null
+    }
+
+    fun checkForAppUpdate(force: Boolean = false) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val update = com.nexusdigital.rivamusic.data.UpdateChecker.checkForUpdate(
+                context = getApplication(),
+                force = force
+            )
+            if (update != null) {
+                _availableUpdate.value = update
+            }
+        }
+    }
+
     fun loadSimilarTracks(track: Track) {
         viewModelScope.launch(Dispatchers.IO) {
             _isLoadingSimilar.value = true
@@ -275,6 +294,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
             _trendingTracks.value = cached.firstOrNull { it.id == "trending" }?.tracks ?: emptyList()
         }
         loadHome()
+        checkForAppUpdate()
         observeSearch()
         viewModelScope.launch {
             _searchFilter.drop(1).collect { filter ->
