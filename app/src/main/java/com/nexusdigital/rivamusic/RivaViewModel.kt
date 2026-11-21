@@ -40,6 +40,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -244,12 +245,16 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
     private val _availableUpdate = MutableStateFlow<com.nexusdigital.rivamusic.data.UpdateInfo?>(null)
     val availableUpdate: StateFlow<com.nexusdigital.rivamusic.data.UpdateInfo?> = _availableUpdate.asStateFlow()
 
+    private val _isCheckingUpdate = MutableStateFlow(false)
+    val isCheckingUpdate: StateFlow<Boolean> = _isCheckingUpdate.asStateFlow()
+
     fun dismissUpdate() {
         _availableUpdate.value = null
     }
 
-    fun checkForAppUpdate(force: Boolean = false) {
+    fun checkForAppUpdate(force: Boolean = false, onManualCheckComplete: ((Boolean) -> Unit)? = null) {
         viewModelScope.launch(Dispatchers.IO) {
+            _isCheckingUpdate.value = true
             val update = com.nexusdigital.rivamusic.data.UpdateChecker.checkForUpdate(
                 context = getApplication(),
                 force = force,
@@ -257,7 +262,15 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
             )
             if (update != null) {
                 _availableUpdate.value = update
+                withContext(Dispatchers.Main) {
+                    onManualCheckComplete?.invoke(true)
+                }
+            } else {
+                withContext(Dispatchers.Main) {
+                    onManualCheckComplete?.invoke(false)
+                }
             }
+            _isCheckingUpdate.value = false
         }
     }
 

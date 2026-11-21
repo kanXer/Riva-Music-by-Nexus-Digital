@@ -205,6 +205,8 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
     val similarTracks by viewModel.similarTracks.collectAsStateWithLifecycle()
     val isLoadingSimilar by viewModel.isLoadingSimilar.collectAsStateWithLifecycle()
     val availableUpdate by viewModel.availableUpdate.collectAsStateWithLifecycle()
+    val isCheckingUpdate by viewModel.isCheckingUpdate.collectAsStateWithLifecycle()
+    var showUpdateDialogExplicitly by rememberSaveable { mutableStateOf(false) }
     var showSimilarSheet by rememberSaveable { mutableStateOf(false) }
     var isFullScreen by rememberSaveable { mutableStateOf(false) }
 
@@ -958,6 +960,18 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
             isDarkMode = isDarkMode,
             selectedRegion = selectedRegion,
             selectedLanguages = selectedLanguages,
+            availableUpdate = availableUpdate,
+            isCheckingUpdate = isCheckingUpdate,
+            onCheckUpdate = {
+                viewModel.checkForAppUpdate(force = true) { hasUpdate ->
+                    if (!hasUpdate) {
+                        Toast.makeText(context, "App is already up to date (v${com.nexusdigital.rivamusic.BuildConfig.VERSION_NAME})", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+            onOpenUpdateDialog = {
+                showUpdateDialogExplicitly = true
+            },
             onSelectThemeMode = viewModel::setThemeMode,
             onToggleDarkMode = viewModel::cycleThemeMode,
             onDismiss = { showProfileSheet = false },
@@ -987,11 +1001,18 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
     }
 
     val update = availableUpdate
-    if (update != null) {
+    if (update != null || (showUpdateDialogExplicitly && availableUpdate != null)) {
+        val targetUpdate = update ?: availableUpdate!!
         UpdateDialog(
-            updateInfo = update,
-            onDismiss = { viewModel.dismissUpdate() },
-            onUpdateClick = { viewModel.dismissUpdate() }
+            updateInfo = targetUpdate,
+            onDismiss = {
+                viewModel.dismissUpdate()
+                showUpdateDialogExplicitly = false
+            },
+            onUpdateClick = {
+                viewModel.dismissUpdate()
+                showUpdateDialogExplicitly = false
+            }
         )
     }
         }

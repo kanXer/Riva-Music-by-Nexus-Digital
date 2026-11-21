@@ -30,11 +30,15 @@ import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.ExitToApp
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.LightMode
+import androidx.compose.material.icons.rounded.NewReleases
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PersonOutline
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -68,7 +72,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.nexusdigital.rivamusic.BuildConfig
 import com.nexusdigital.rivamusic.R
+import com.nexusdigital.rivamusic.data.UpdateInfo
 import com.nexusdigital.rivamusic.data.UserProfile
 import com.nexusdigital.rivamusic.theme.BgDeep
 import com.nexusdigital.rivamusic.theme.Coral
@@ -347,6 +353,10 @@ fun ProfileBottomSheet(
     isDarkMode: Boolean = true,
     selectedRegion: MusicRegion? = null,
     selectedLanguages: Set<String> = emptySet(),
+    availableUpdate: UpdateInfo? = null,
+    isCheckingUpdate: Boolean = false,
+    onCheckUpdate: () -> Unit = {},
+    onOpenUpdateDialog: () -> Unit = {},
     onSelectThemeMode: (ThemeMode) -> Unit = {},
     onToggleDarkMode: () -> Unit = {},
     onDismiss: () -> Unit,
@@ -699,6 +709,108 @@ fun ProfileBottomSheet(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            // App Version & Update Status Card
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(PanelElevated)
+                    .border(
+                        1.dp,
+                        if (availableUpdate != null) Lime.copy(alpha = 0.5f) else PanelBorder,
+                        RoundedCornerShape(16.dp)
+                    )
+                    .padding(14.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = if (availableUpdate != null) Icons.Rounded.NewReleases else Icons.Rounded.SystemUpdate,
+                        contentDescription = null,
+                        tint = if (availableUpdate != null) Lime else TextSecondary,
+                        modifier = Modifier.size(22.dp),
+                    )
+                    Spacer(Modifier.width(14.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "App Version",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = TextPrimary,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (RivaIsDark) Color.White.copy(alpha = 0.08f) else Panel)
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = "v${BuildConfig.VERSION_NAME}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Lime,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        }
+                        Text(
+                            text = if (availableUpdate != null) {
+                                "Update available: v${availableUpdate.latestVersion}"
+                            } else {
+                                "Installed version is up to date"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (availableUpdate != null) Lime else TextSecondary,
+                        )
+                    }
+
+                    if (isCheckingUpdate) {
+                        CircularProgressIndicator(
+                            color = Lime,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    } else if (availableUpdate != null) {
+                        Button(
+                            onClick = {
+                                onDismiss()
+                                onOpenUpdateDialog()
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Lime,
+                                contentColor = Ink,
+                            ),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            modifier = Modifier.height(32.dp)
+                        ) {
+                            Text(
+                                text = "Update",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    } else {
+                        IconButton(
+                            onClick = onCheckUpdate,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Refresh,
+                                contentDescription = "Check for updates",
+                                tint = TextSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
                 }
             }
 
