@@ -265,16 +265,47 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
             _isLoadingSimilar.value = true
             val userLangs = _selectedLanguages.value.ifEmpty { setOf("Hindi") }
             val primaryLang = userLangs.firstOrNull() ?: "Hindi"
-            val radio = runCatching { music.fetchRadioTracks(track.id, 40) }.getOrDefault(emptyList())
-                .filter { music.isRealSong(it) && isMatchingSelectedLanguages(it, userLangs) }
-            val searchResults = if (radio.size < 20) {
-                runCatching { music.searchMusicTracks("$primaryLang ${track.artist} hits", 30) }
-                    .getOrDefault(emptyList())
-                    .filter { music.isRealSong(it) && isMatchingSelectedLanguages(it, userLangs) }
-            } else {
-                emptyList()
+            val targetArtist = track.artist.split(",", "&", "feat.", "ft.", "•", "|").firstOrNull()?.trim()
+                ?.takeIf { it.isNotBlank() && !it.equals("YouTube Music", ignoreCase = true) }
+                ?: track.artist.trim()
+
+            val curWords = titleTokens(track.title)
+            val curKey = curWords.take(3).toSet()
+
+            // Fetch radio/automix tracks from YouTube Music
+            val radio = runCatching { music.fetchRadioTracks(track.id, 50) }.getOrDefault(emptyList())
+                .filter { it.id != track.id && music.isRealSong(it) && isMatchingSelectedLanguages(it, userLangs) }
+                // Avoid playing the exact same song again (different cover/re-upload/reverb)
+                .filter { cand -> curKey.isEmpty() || titleTokens(cand.title).intersect(curKey).size < 2 }
+
+            val collected = mutableListOf<Track>()
+            val seen = mutableSetOf(track.id)
+            radio.forEach {
+                if (seen.add(it.id)) collected.add(it)
             }
-            _similarTracks.value = (radio + searchResults).distinctBy { it.id }.take(50)
+
+            // Fallback / supplement if radio has fewer than 50 tracks
+            if (collected.size < 50) {
+                val queries = listOfNotNull(
+                    "$targetArtist hits",
+                    "$primaryLang $targetArtist songs",
+                    "best of $targetArtist",
+                    "similar songs to ${track.title} $targetArtist".takeIf { track.title.isNotBlank() }
+                )
+                for (query in queries) {
+                    if (collected.size >= 50) break
+                    val searchResults = runCatching { music.searchMusicTracks(query, 30) }
+                        .getOrDefault(emptyList())
+                        .filter { it.id !in seen && music.isRealSong(it) && isMatchingSelectedLanguages(it, userLangs) }
+                        .filter { cand -> curKey.isEmpty() || titleTokens(cand.title).intersect(curKey).size < 2 }
+
+                    searchResults.forEach {
+                        if (seen.add(it.id)) collected.add(it)
+                    }
+                }
+            }
+
+            _similarTracks.value = collected.distinctBy { it.id }.take(50)
             _isLoadingSimilar.value = false
         }
     }

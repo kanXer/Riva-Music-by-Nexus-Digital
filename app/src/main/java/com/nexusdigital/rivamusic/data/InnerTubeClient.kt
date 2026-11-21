@@ -1044,7 +1044,10 @@ class InnerTubeClient(
                 "jukebox", "mashup", "non stop", "nonstop", "non-stop",
                 "full album", "full audio songs", "all songs", "audio jukebox",
                 "video jukebox", "hours", "hour", "1 hr", "2 hr", "3 hr", "4 hr", "5 hr", "6 hr", "7 hr", "8 hr",
-                "mega mix", "megamix", "compilation"
+                "mega mix", "megamix", "compilation",
+                "slowed", "reverb", "slow+reverb", "slowed+reverb", "slowed + reverb",
+                "lofi", "lo-fi", "chill mix", "sped up", "speed up", "speedup", "nightcore", "bass boosted",
+                "ringtone", "status", "bgm", "instrumental version", "karaoke"
             )
             for (keyword in bannedKeywords) {
                 if (lower.contains(keyword)) return false
