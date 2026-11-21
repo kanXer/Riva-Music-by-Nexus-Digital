@@ -1,10 +1,18 @@
 package com.nexusdigital.rivamusic.data
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import com.nexusdigital.rivamusic.BuildConfig
+import com.nexusdigital.rivamusic.MainActivity
+import com.nexusdigital.rivamusic.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Request
@@ -22,7 +30,11 @@ object UpdateChecker {
     private const val TAG = "UpdateChecker"
     private const val PREFS_NAME = "riva_update_checker"
     private const val KEY_LAST_CHECK_TIME = "last_check_timestamp"
-    private const val CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000L // 6 hours
+    private const val KEY_LAST_NOTIFIED_VERSION = "last_notified_version"
+    private const val CHECK_INTERVAL_MS = 60 * 60 * 1000L // Check hourly in background
+
+    const val CHANNEL_ID = "riva_app_updates"
+    const val NOTIFICATION_ID = 10099
 
     // Target repository
     private const val REPO_OWNER = "kanXer"
@@ -33,12 +45,14 @@ object UpdateChecker {
      * Checks for an available update on GitHub Releases.
      *
      * @param context Application context
-     * @param force If true, bypasses the 6-hour rate-limit interval
-     * @return UpdateInfo if a newer version is found, or null if up-to-date, rate-limited, or error occurs.
+     * @param force If true, bypasses the interval check
+     * @param notifyIfNew If true, triggers a system push notification when a newer release is found
+     * @return UpdateInfo if a newer version is found, or null if up-to-date, interval limited, or error occurs.
      */
     suspend fun checkForUpdate(
         context: Context,
-        force: Boolean = false
+        force: Boolean = false,
+        notifyIfNew: Boolean = true
     ): UpdateInfo? = withContext(Dispatchers.IO) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
@@ -94,13 +108,23 @@ object UpdateChecker {
 
             if (isVersionNewer(cleanTag, currentVersion)) {
                 Log.i(TAG, "Update available: $cleanTag (current: $currentVersion)")
-                return@withContext UpdateInfo(
+                val updateInfo = UpdateInfo(
                     latestVersion = cleanTag,
                     currentVersion = currentVersion,
                     releaseNotes = releaseNotes,
                     downloadUrl = finalDownloadUrl,
                     releasePageUrl = htmlUrl
                 )
+
+                if (notifyIfNew) {
+                    val lastNotified = prefs.getString(KEY_LAST_NOTIFIED_VERSION, "")
+                    if (lastNotified != cleanTag) {
+                        showUpdateNotification(context, updateInfo)
+                        prefs.edit().putString(KEY_LAST_NOTIFIED_VERSION, cleanTag).apply()
+                    }
+                }
+
+                return@withContext updateInfo
             } else {
                 Log.d(TAG, "App is up to date: current=$currentVersion, remote=$cleanTag")
                 return@withContext null
@@ -108,6 +132,75 @@ object UpdateChecker {
         } catch (e: Exception) {
             Log.e(TAG, "Error checking for updates: ${e.message}")
             return@withContext null
+        }
+    }
+
+    /**
+     * Creates Notification Channel and displays a high-priority system status-bar notification.
+     */
+    fun showUpdateNotification(context: Context, updateInfo: UpdateInfo) {
+        try {
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                ?: return
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    CHANNEL_ID,
+                    "App Updates",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Notifications when a new version of Riva Music is released on GitHub"
+                    enableVibration(true)
+                }
+                notificationManager.createNotificationChannel(channel)
+            }
+
+            val intent = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                context,
+                0,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            // Direct download action intent
+            val downloadIntent = Intent(Intent.ACTION_VIEW, Uri.parse(updateInfo.downloadUrl)).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            val downloadPendingIntent = PendingIntent.getActivity(
+                context,
+                1,
+                downloadIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val summaryNotes = updateInfo.releaseNotes.lineSequence()
+                .filter { it.isNotBlank() }
+                .take(3)
+                .joinToString("\n")
+                .ifEmpty { "A newer version of Riva Music is now available." }
+
+            val builder = NotificationCompat.Builder(context, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle("New Version Available: v${updateInfo.latestVersion}")
+                .setContentText("Tap to open Riva Music and install the update.")
+                .setStyle(NotificationCompat.BigTextStyle().bigText("Version v${updateInfo.latestVersion} is out!\n$summaryNotes"))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
+                .addAction(
+                    android.R.drawable.stat_sys_download,
+                    "Download APK",
+                    downloadPendingIntent
+                )
+
+            NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, builder.build())
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Missing POST_NOTIFICATIONS permission to show notification: ${e.message}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to display update notification: ${e.message}")
         }
     }
 

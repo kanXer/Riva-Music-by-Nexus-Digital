@@ -252,7 +252,8 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             val update = com.nexusdigital.rivamusic.data.UpdateChecker.checkForUpdate(
                 context = getApplication(),
-                force = force
+                force = force,
+                notifyIfNew = true
             )
             if (update != null) {
                 _availableUpdate.value = update
