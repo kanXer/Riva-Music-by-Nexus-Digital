@@ -298,13 +298,25 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
                 if (seen.add(it.id)) collected.add(it)
             }
 
+            // User listening history & liked artists recommendation boost:
+            val userRecentTracks = recentRepo.recent.value
+            val userLikedTracks = liked.value.map { it.track }
+            val topHistoryArtists = (userLikedTracks + userRecentTracks)
+                .mapNotNull { it.artist.split(",", "&", "feat.", "ft.", "•", "|").firstOrNull()?.trim() }
+                .filter { it.isNotBlank() && !it.equals("YouTube Music", ignoreCase = true) && !it.equals(targetArtist, ignoreCase = true) }
+                .distinct()
+                .shuffled()
+                .take(3)
+
             // Fallback / supplement if radio has fewer than 50 tracks
             if (collected.size < 50) {
                 val queries = listOfNotNull(
                     "$targetArtist hits",
                     "$primaryLang $targetArtist songs",
                     "best of $targetArtist",
-                    "similar songs to ${track.title} $targetArtist".takeIf { track.title.isNotBlank() }
+                    "similar songs to ${track.title} $targetArtist".takeIf { track.title.isNotBlank() },
+                    topHistoryArtists.getOrNull(0)?.let { "$primaryLang $it hits" },
+                    topHistoryArtists.getOrNull(1)?.let { "best of $it $primaryLang" }
                 )
                 for (query in queries) {
                     if (collected.size >= 50) break
@@ -871,9 +883,10 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             val chain = relatedChain(cur)
             if (chain.isNotEmpty() && queue.value.size <= 1 && !isPlaylistMode && _repeatMode.value != RepeatMode.ONE) {
-                val merged = listOf(cur) + chain
+                val toAdd = if (_shuffleEnabled.value) chain.shuffled() else chain
+                val merged = listOf(cur) + toAdd
                 queue.value = merged
-                baseQueue = merged
+                baseQueue = listOf(cur) + chain
             }
         }
     }
@@ -1366,18 +1379,31 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
             if (seen.add(it.id)) collected.add(it)
         }
 
-        // 2. Only fallback to targeted search if Automix radio didn't provide enough tracks (< 15)
-        if (collected.size < 15) {
+        // 2. User history & liked blend:
+        // Extract top artists from user's actual history & liked songs to personalize next tracks
+        val userRecentTracks = recentRepo.recent.value
+        val userLikedTracks = liked.value.map { it.track }
+        val targetArtist = track.artist.split(",", "&", "feat.", "ft.", "•", "|").firstOrNull()?.trim()
+        val historyArtists = (userLikedTracks + userRecentTracks)
+            .mapNotNull { it.artist.split(",", "&", "feat.", "ft.", "•", "|").firstOrNull()?.trim() }
+            .filter { it.isNotBlank() && !it.equals("YouTube Music", ignoreCase = true) && !it.equals(targetArtist, ignoreCase = true) }
+            .distinct()
+            .shuffled()
+            .take(2)
+
+        // Fallback or supplement if Automix radio didn't provide enough tracks (< 20)
+        if (collected.size < 20) {
             val curWords = titleTokens(track.title)
             val curKey = curWords.take(3).toSet()
             val primaryLang = userLangs.firstOrNull() ?: "Hindi"
-            val queries = listOf(
+            val queries = listOfNotNull(
                 "$primaryLang ${track.artist} hits",
-                "best $primaryLang ${track.artist} songs"
+                "best $primaryLang ${track.artist} songs",
+                historyArtists.firstOrNull()?.let { "$primaryLang $it hits" }
             )
 
             for (query in queries) {
-                if (collected.size >= 25) break
+                if (collected.size >= 30) break
                 val found = runCatching { music.searchMusicTracks(query, 25) }
                     .getOrDefault(emptyList())
                     .ifEmpty { runCatching { music.search(query, 25) }.getOrDefault(emptyList()) }
