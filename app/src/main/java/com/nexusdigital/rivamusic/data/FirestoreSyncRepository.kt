@@ -89,13 +89,19 @@ class FirestoreSyncRepository {
         }
     }
 
-    suspend fun saveUserPreferences(uid: String, regionCode: String, languages: Set<String>): Boolean {
+    suspend fun saveUserPreferences(
+        uid: String,
+        regionCode: String,
+        languages: Set<String>,
+        artists: Set<String> = emptySet()
+    ): Boolean {
         if (uid.isBlank() || uid.startsWith("guest")) return false
         return try {
             val docRef = firestore.collection("users").document(uid)
             val data = hashMapOf(
                 "region" to regionCode,
                 "languages" to languages.toList(),
+                "preferredArtists" to artists.toList(),
                 "updatedAt" to System.currentTimeMillis(),
             )
             docRef.set(data, SetOptions.merge()).await()
@@ -105,7 +111,7 @@ class FirestoreSyncRepository {
         }
     }
 
-    suspend fun fetchUserPreferences(uid: String): Pair<String, Set<String>>? {
+    suspend fun fetchUserPreferences(uid: String): Triple<String, Set<String>, Set<String>>? {
         if (uid.isBlank() || uid.startsWith("guest")) return null
         return try {
             val doc = firestore.collection("users").document(uid).get().await()
@@ -113,7 +119,9 @@ class FirestoreSyncRepository {
                 val region = doc.getString("region") ?: "IN"
                 val langsList = (doc.get("languages") as? List<*>)?.mapNotNull { it?.toString() }
                 val langs = langsList?.toSet()?.takeIf { it.isNotEmpty() } ?: setOf("Hindi")
-                Pair(region, langs)
+                val artistsList = (doc.get("preferredArtists") as? List<*>)?.mapNotNull { it?.toString() }
+                val artists = artistsList?.toSet() ?: emptySet()
+                Triple(region, langs, artists)
             } else {
                 null
             }

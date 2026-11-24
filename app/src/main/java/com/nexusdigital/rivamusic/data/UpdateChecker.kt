@@ -31,7 +31,7 @@ object UpdateChecker {
     private const val PREFS_NAME = "riva_update_checker"
     private const val KEY_LAST_CHECK_TIME = "last_check_timestamp"
     private const val KEY_LAST_NOTIFIED_VERSION = "last_notified_version"
-    private const val CHECK_INTERVAL_MS = 60 * 60 * 1000L // Check hourly in background
+    private const val CHECK_INTERVAL_MS = 15 * 60 * 1000L // Check every 15 mins
 
     const val CHANNEL_ID = "riva_app_updates"
     const val NOTIFICATION_ID = 10099
@@ -184,6 +184,8 @@ object UpdateChecker {
 
             val builder = NotificationCompat.Builder(context, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setDefaults(NotificationCompat.DEFAULT_ALL)
                 .setContentTitle("New Version Available: v${updateInfo.latestVersion}")
                 .setContentText("Tap to open Riva Music and install the update.")
                 .setStyle(NotificationCompat.BigTextStyle().bigText("Version v${updateInfo.latestVersion} is out!\n$summaryNotes"))

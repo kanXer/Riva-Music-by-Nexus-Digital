@@ -197,6 +197,11 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
     )
     val selectedLanguages: StateFlow<Set<String>> = _selectedLanguages.asStateFlow()
 
+    private val _preferredArtists = MutableStateFlow<Set<String>>(
+        homePrefs.getStringSet(KEY_PREFERRED_ARTISTS, null) ?: emptySet()
+    )
+    val preferredArtists: StateFlow<Set<String>> = _preferredArtists.asStateFlow()
+
     private val _showLanguagePrompt = MutableStateFlow(
         !homePrefs.getBoolean(KEY_LANGUAGES_CONFIGURED, false)
     )
@@ -298,11 +303,12 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
                 if (seen.add(it.id)) collected.add(it)
             }
 
-            // User listening history & liked artists recommendation boost:
+            // User listening history, preferred artists & liked artists recommendation boost:
             val userRecentTracks = recentRepo.recent.value
             val userLikedTracks = liked.value.map { it.track }
-            val topHistoryArtists = (userLikedTracks + userRecentTracks)
-                .mapNotNull { it.artist.split(",", "&", "feat.", "ft.", "•", "|").firstOrNull()?.trim() }
+            val preferredList = _preferredArtists.value.toList()
+            val topHistoryArtists = (preferredList + (userLikedTracks + userRecentTracks)
+                .mapNotNull { it.artist.split(",", "&", "feat.", "ft.", "•", "|").firstOrNull()?.trim() })
                 .filter { it.isNotBlank() && !it.equals("YouTube Music", ignoreCase = true) && !it.equals(targetArtist, ignoreCase = true) }
                 .distinct()
                 .shuffled()
@@ -586,24 +592,31 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun updatePreferences(region: MusicRegion, languages: Set<String>) {
+    fun updatePreferences(
+        region: MusicRegion,
+        languages: Set<String>,
+        artists: Set<String> = _preferredArtists.value
+    ) {
         val chosen = orderLanguages(languages)
         _selectedRegion.value = region
         _selectedLanguages.value = chosen
+        _preferredArtists.value = artists
         music.setRegion(region.code)
         homePrefs.edit()
             .putString(KEY_SELECTED_REGION, region.code)
             .putStringSet(KEY_SELECTED_LANGUAGES, chosen)
+            .putStringSet(KEY_PREFERRED_ARTISTS, artists)
             .putBoolean(KEY_LANGUAGES_CONFIGURED, true)
             .remove(KEY_HOME_SECTIONS)
             .apply()
         _showLanguagePrompt.value = false
-        _messages.tryEmit("Region: ${region.flag} ${region.name} • ${chosen.joinToString(", ")}")
+        val artistMsg = if (artists.isNotEmpty()) " • ${artists.size} Artists" else ""
+        _messages.tryEmit("Region: ${region.flag} ${region.name} • ${chosen.joinToString(", ")}$artistMsg")
 
         val user = currentUser.value
         if (user != null && !user.isGuest) {
             viewModelScope.launch(Dispatchers.IO) {
-                firestoreSync.saveUserPreferences(user.uid, region.code, chosen)
+                firestoreSync.saveUserPreferences(user.uid, region.code, chosen, artists)
             }
         }
 
@@ -611,7 +624,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun updateLanguages(languages: Set<String>) {
-        updatePreferences(_selectedRegion.value, languages)
+        updatePreferences(_selectedRegion.value, languages, _preferredArtists.value)
     }
 
     fun openLanguageSelector() {
@@ -1384,13 +1397,14 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
             return collected
         }
 
-        // 2. User history & liked blend (only if YouTube radio returned very few tracks):
-        // Extract top artists from user's actual history & liked songs to personalize next tracks
+        // 2. User history, preferred artists & liked blend (only if YouTube radio returned very few tracks):
+        // Extract top artists from user's preferred artists, actual history & liked songs to personalize next tracks
         val userRecentTracks = recentRepo.recent.value
         val userLikedTracks = liked.value.map { it.track }
         val targetArtist = track.artist.split(",", "&", "feat.", "ft.", "•", "|").firstOrNull()?.trim()
-        val historyArtists = (userLikedTracks + userRecentTracks)
-            .mapNotNull { it.artist.split(",", "&", "feat.", "ft.", "•", "|").firstOrNull()?.trim() }
+        val preferredList = _preferredArtists.value.toList()
+        val historyArtists = (preferredList + (userLikedTracks + userRecentTracks)
+            .mapNotNull { it.artist.split(",", "&", "feat.", "ft.", "•", "|").firstOrNull()?.trim() })
             .filter { it.isNotBlank() && !it.equals("YouTube Music", ignoreCase = true) && !it.equals(targetArtist, ignoreCase = true) }
             .distinct()
             .shuffled()
@@ -1603,15 +1617,17 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             val remote = firestoreSync.fetchUserPreferences(user.uid)
             if (remote != null) {
-                val (regionCode, remoteLangs) = remote
+                val (regionCode, remoteLangs, remoteArtists) = remote
                 val matchingRegion = AVAILABLE_REGIONS.firstOrNull { it.code == regionCode } ?: _selectedRegion.value
                 val validLangs = orderLanguages(remoteLangs.ifEmpty { setOf("Hindi") })
                 _selectedRegion.value = matchingRegion
                 _selectedLanguages.value = validLangs
+                _preferredArtists.value = remoteArtists
                 music.setRegion(matchingRegion.code)
                 homePrefs.edit()
                     .putString(KEY_SELECTED_REGION, matchingRegion.code)
                     .putStringSet(KEY_SELECTED_LANGUAGES, validLangs)
+                    .putStringSet(KEY_PREFERRED_ARTISTS, remoteArtists)
                     .putBoolean(KEY_LANGUAGES_CONFIGURED, true)
                     .remove(KEY_HOME_SECTIONS)
                     .apply()
@@ -1620,7 +1636,8 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
             } else {
                 val currentReg = _selectedRegion.value.code
                 val currentLangs = _selectedLanguages.value.ifEmpty { setOf("Hindi") }
-                firestoreSync.saveUserPreferences(user.uid, currentReg, currentLangs)
+                val currentArtists = _preferredArtists.value
+                firestoreSync.saveUserPreferences(user.uid, currentReg, currentLangs, currentArtists)
             }
         }
     }
@@ -1902,6 +1919,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
         private const val KEY_REPEAT_MODE = "repeat_mode"
         private const val KEY_SELECTED_REGION = "selected_region"
         private const val KEY_SELECTED_LANGUAGES = "selected_languages"
+        private const val KEY_PREFERRED_ARTISTS = "preferred_artists"
         private const val KEY_LANGUAGES_CONFIGURED = "languages_configured"
     }
 }

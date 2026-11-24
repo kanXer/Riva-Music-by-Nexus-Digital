@@ -185,6 +185,7 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
     val repeatMode by viewModel.repeatMode.collectAsStateWithLifecycle()
     val selectedRegion by viewModel.selectedRegion.collectAsStateWithLifecycle()
     val selectedLanguages by viewModel.selectedLanguages.collectAsStateWithLifecycle()
+    val preferredArtists by viewModel.preferredArtists.collectAsStateWithLifecycle()
     val showLanguagePrompt by viewModel.showLanguagePrompt.collectAsStateWithLifecycle()
     val sleepTimerMinutes by viewModel.sleepTimerMinutes.collectAsStateWithLifecycle()
     val sleepRemainingSeconds by viewModel.sleepRemainingSeconds.collectAsStateWithLifecycle()
@@ -579,9 +580,10 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
         LanguageSelectionDialog(
             initialRegion = selectedRegion,
             initialSelected = selectedLanguages,
+            initialArtists = preferredArtists,
             onDismiss = { viewModel.dismissLanguageSelector() },
-            onSave = { region, chosen ->
-                viewModel.updatePreferences(region, chosen)
+            onSave = { region, chosen, artists ->
+                viewModel.updatePreferences(region, chosen, artists)
             },
         )
     }

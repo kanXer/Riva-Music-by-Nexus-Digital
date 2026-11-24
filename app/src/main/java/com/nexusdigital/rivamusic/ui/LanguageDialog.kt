@@ -68,12 +68,51 @@ val MUSIC_LANGUAGES = listOf(
     MusicLanguage("Urdu", "اردو"),
 )
 
+val POPULAR_ARTISTS = listOf(
+    "Arijit Singh",
+    "Pritam",
+    "Atif Aslam",
+    "Shreya Ghoshal",
+    "KK",
+    "Karan Aujla",
+    "Diljit Dosanjh",
+    "Sidhu Moose Wala",
+    "AP Dhillon",
+    "Honey Singh",
+    "Badshah",
+    "Neha Kakkar",
+    "Vishal Mishra",
+    "Jubin Nautiyal",
+    "Mohit Chauhan",
+    "Sonu Nigam",
+    "Udit Narayan",
+    "Kumar Sanu",
+    "Alka Yagnik",
+    "Lata Mangeshkar",
+    "Kishore Kumar",
+    "A.R. Rahman",
+    "Anirudh Ravichander",
+    "Sid Sriram",
+    "King",
+    "Darshan Raval",
+    "Taylor Swift",
+    "The Weeknd",
+    "Justin Bieber",
+    "Ed Sheeran",
+    "Drake",
+    "Billie Eilish",
+    "Dua Lipa",
+    "Eminem",
+    "Alan Walker"
+)
+
 @Composable
 fun LanguageSelectionDialog(
     initialRegion: MusicRegion = AVAILABLE_REGIONS.first(),
     initialSelected: Set<String>,
+    initialArtists: Set<String> = emptySet(),
     onDismiss: () -> Unit,
-    onSave: (MusicRegion, Set<String>) -> Unit,
+    onSave: (MusicRegion, Set<String>, Set<String>) -> Unit,
 ) {
     var selectedRegion by remember(initialRegion) { mutableStateOf(initialRegion) }
     var selectedLanguages by remember(initialSelected) {
@@ -81,6 +120,7 @@ fun LanguageSelectionDialog(
             if (initialSelected.isNotEmpty()) initialSelected else setOf("Hindi", "English")
         )
     }
+    var selectedArtists by remember(initialArtists) { mutableStateOf(initialArtists) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -296,6 +336,73 @@ fun LanguageSelectionDialog(
 
                 Spacer(Modifier.height(16.dp))
 
+                // Section 3: Favorite Artists Selection
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "FAVORITE ARTISTS",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Lime,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = "(${selectedArtists.size} selected)",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextFaint,
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(POPULAR_ARTISTS, key = { it }) { artist ->
+                        val isSelected = selectedArtists.contains(artist)
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(13.dp))
+                                .background(if (isSelected) Lime.copy(alpha = 0.22f) else Panel)
+                                .border(
+                                    width = if (isSelected) 1.5.dp else 1.dp,
+                                    color = if (isSelected) Lime else PanelBorder,
+                                    shape = RoundedCornerShape(13.dp),
+                                )
+                                .clickable {
+                                    selectedArtists = if (isSelected) {
+                                        selectedArtists - artist
+                                    } else {
+                                        selectedArtists + artist
+                                    }
+                                }
+                                .padding(horizontal = 11.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = artist,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (isSelected) TextPrimary else TextSecondary,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                            )
+                            if (isSelected) {
+                                Spacer(Modifier.width(5.dp))
+                                Icon(
+                                    Icons.Rounded.Check,
+                                    contentDescription = null,
+                                    tint = Lime,
+                                    modifier = Modifier.size(13.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+
                 // Actions
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -323,7 +430,7 @@ fun LanguageSelectionDialog(
                             } else {
                                 selectedLanguages
                             }
-                            onSave(selectedRegion, ordered)
+                            onSave(selectedRegion, ordered, selectedArtists)
                         },
                         modifier = Modifier.weight(1.5f),
                         enabled = selectedLanguages.isNotEmpty(),
