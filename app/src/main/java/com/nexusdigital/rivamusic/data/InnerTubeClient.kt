@@ -122,7 +122,7 @@ class InnerTubeClient(
     suspend fun searchMusicTracks(query: String, limit: Int = 30): List<Track> =
         searchMusic(query, SearchFilter.SONGS, limit)
             .mapNotNull { it.track }
-            .filter { isRealSong(it.title, it.durationSeconds) }
+            .filter { isRealSong(it.title, it.durationSeconds, it.artist) }
             .distinctBy { it.id }
             .take(limit)
 
@@ -262,7 +262,16 @@ class InnerTubeClient(
                             ?.lastOrNull().asObjectOrNull()
                             ?.get("url").asStringOrNull()
 
-                        if (vid != null && title != null && isRealSong(title, duration)) {
+                        val mvt = renderer["navigationEndpoint"].asObjectOrNull()
+                            ?.get("watchEndpoint").asObjectOrNull()
+                            ?.get("watchEndpointMusicSupportedConfigs").asObjectOrNull()
+                            ?.get("watchEndpointMusicConfig").asObjectOrNull()
+                            ?.get("musicVideoType").asStringOrNull()
+
+                        // Reject podcast episodes or invalid types
+                        val isPodcast = mvt == "MUSIC_VIDEO_TYPE_PODCAST_EPISODE"
+
+                        if (vid != null && title != null && !isPodcast && isRealSong(title, duration, artist)) {
                             if (seen.add(vid)) {
                                 out += Track(
                                     id = vid,
@@ -352,13 +361,15 @@ class InnerTubeClient(
             if (DURATION_REGEX.matches(segment)) parseDuration(segment) else null
         } ?: 0
 
-        if (filter == SearchFilter.SONGS && !isRealSong(title, duration)) {
-            return null
-        }
         val statWords = listOf("plays", "views", "monthly audience", "subscribers", "songs", "episodes")
         val meaningful = detailSegments.filterNot { segment ->
             DURATION_REGEX.matches(segment) ||
                 statWords.any { segment.contains(it, ignoreCase = true) }
+        }
+        val artistCandidate = meaningful.firstOrNull()?.takeIf { it.length < 90 } ?: ""
+
+        if (filter == SearchFilter.SONGS && !isRealSong(title, duration, artistCandidate)) {
+            return null
         }
 
         val id = when (type) {
@@ -446,7 +457,6 @@ class InnerTubeClient(
         val duration = fixedDuration ?: segments.firstNotNullOfOrNull { segment ->
             if (DURATION_REGEX.matches(segment)) parseDuration(segment) else null
         } ?: 0
-        if (!isRealSong(title, duration)) return null
         val statWords = listOf("plays", "views", "monthly audience", "subscribers", "songs", "episodes")
         val meaningful = segments.filterNot { segment ->
             DURATION_REGEX.matches(segment) ||
@@ -454,6 +464,8 @@ class InnerTubeClient(
                 segment.lowercase() in TYPE_WORDS
         }
         val artist = meaningful.firstOrNull()?.takeIf { it.length < 120 } ?: "YouTube Music"
+
+        if (!isRealSong(title, duration, artist)) return null
 
         return Track(
             id = id,
@@ -899,7 +911,7 @@ class InnerTubeClient(
             .asStringOrNull()
 
         if (duration <= 0 || duration > 720) return null
-        if (!isRealSong(title, duration)) return null
+        if (!isRealSong(title, duration, artist)) return null
         if (this["badges"].toString().contains("LIVE", ignoreCase = true)) return null
 
         return Track(
@@ -1036,22 +1048,47 @@ class InnerTubeClient(
             "playlist", "podcast", "episode", "profile",
         )
 
-        fun isRealSong(title: String, durationSeconds: Int): Boolean {
+        fun isRealSong(title: String, durationSeconds: Int, artist: String = ""): Boolean {
             if (durationSeconds in 1..25) return false
             if (durationSeconds > 720) return false // > 12 mins is not a standalone song
-            val lower = title.lowercase()
+            val lowerTitle = title.lowercase()
+            val lowerArtist = artist.lowercase()
+            val combined = "$lowerTitle $lowerArtist"
+
+            // Unwanted mashups, compilations, mixes, DJ tracks, bgm, ringtones, etc.
             val bannedKeywords = listOf(
-                "jukebox", "mashup", "non stop", "nonstop", "non-stop",
+                "jukebox", "mashup", "mash up", "non stop", "nonstop", "non-stop",
                 "full album", "full audio songs", "all songs", "audio jukebox",
                 "video jukebox", "hours", "hour", "1 hr", "2 hr", "3 hr", "4 hr", "5 hr", "6 hr", "7 hr", "8 hr",
-                "mega mix", "megamix", "compilation",
+                "mega mix", "megamix", "compilation", "medley",
                 "slowed", "reverb", "slow+reverb", "slowed+reverb", "slowed + reverb",
                 "lofi", "lo-fi", "chill mix", "sped up", "speed up", "speedup", "nightcore", "bass boosted",
-                "ringtone", "status", "bgm", "instrumental version", "karaoke"
+                "ringtone", "status", "bgm", "instrumental version", "karaoke",
+                "dance mix", "dj mix", "dj remix", "party mix", "continuous mix",
+                "dialogue", "scene", "scenes", "teaser", "trailer", "promo",
+                "behind the scenes", "making of", "reaction", "interview", "podcast",
+                "full episode", "short film", "full movie", "movie scenes", "comedy scene"
             )
             for (keyword in bannedKeywords) {
-                if (lower.contains(keyword)) return false
+                if (combined.contains(keyword)) return false
             }
+
+            // Exclude purely visual video labels if present as full phrases or tags
+            val videoTags = listOf(
+                "8k video", "4k video", "official 4k", "8k ultra", "hd video",
+                "music video", "official video", "full video", "lyric video", "lyrics video",
+                "visualizer video", "video song", "vertical video"
+            )
+            for (tag in videoTags) {
+                // If title contains explicit video tag e.g. "Kala Chashma 8K Video | Baar Baar Dekho"
+                if (lowerTitle.contains(tag)) return false
+            }
+
+            // Filter out titles with excessive movie metadata separators commonly found on video re-uploads
+            // e.g., "Song | Movie | Actor1, Actor2 | Singer | Label"
+            val pipeCount = title.count { it == '|' }
+            if (pipeCount >= 3) return false
+
             return true
         }
         // Carousel shelf headers ("Releases for you", "Videos", ...) are

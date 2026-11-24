@@ -308,8 +308,8 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
                 .shuffled()
                 .take(3)
 
-            // Fallback / supplement if radio has fewer than 50 tracks
-            if (collected.size < 50) {
+            // Fallback / supplement if radio has fewer than 20 tracks
+            if (collected.size < 20) {
                 val queries = listOfNotNull(
                     "$targetArtist hits",
                     "$primaryLang $targetArtist songs",
@@ -1371,7 +1371,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
         val seen = mutableSetOf(track.id)
 
         // 1. YouTube Music Automix / Radio queue, strictly filtered for user's selected languages
-        val radio = runCatching { music.fetchRadioTracks(track.id, 40) }.getOrDefault(emptyList())
+        val radio = runCatching { music.fetchRadioTracks(track.id, 50) }.getOrDefault(emptyList())
         val matchingRadio = radio.filter {
             it.id != track.id && music.isRealSong(it) && isMatchingSelectedLanguages(it, userLangs)
         }
@@ -1379,7 +1379,12 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
             if (seen.add(it.id)) collected.add(it)
         }
 
-        // 2. User history & liked blend:
+        // If YouTube Radio provided good recommendations, use them directly!
+        if (collected.size >= 15) {
+            return collected
+        }
+
+        // 2. User history & liked blend (only if YouTube radio returned very few tracks):
         // Extract top artists from user's actual history & liked songs to personalize next tracks
         val userRecentTracks = recentRepo.recent.value
         val userLikedTracks = liked.value.map { it.track }
