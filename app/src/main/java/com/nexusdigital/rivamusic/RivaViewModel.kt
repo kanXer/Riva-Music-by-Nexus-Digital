@@ -250,11 +250,20 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
     private val _availableUpdate = MutableStateFlow<com.nexusdigital.rivamusic.data.UpdateInfo?>(null)
     val availableUpdate: StateFlow<com.nexusdigital.rivamusic.data.UpdateInfo?> = _availableUpdate.asStateFlow()
 
+    private val _showUpdatePopup = MutableStateFlow(false)
+    val showUpdatePopup: StateFlow<Boolean> = _showUpdatePopup.asStateFlow()
+
     private val _isCheckingUpdate = MutableStateFlow(false)
     val isCheckingUpdate: StateFlow<Boolean> = _isCheckingUpdate.asStateFlow()
 
     fun dismissUpdate() {
-        _availableUpdate.value = null
+        _showUpdatePopup.value = false
+    }
+
+    fun openUpdateDialog() {
+        if (_availableUpdate.value != null) {
+            _showUpdatePopup.value = true
+        }
     }
 
     fun checkForAppUpdate(force: Boolean = false, onManualCheckComplete: ((Boolean) -> Unit)? = null) {
@@ -267,6 +276,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
             )
             if (update != null) {
                 _availableUpdate.value = update
+                _showUpdatePopup.value = true
                 withContext(Dispatchers.Main) {
                     onManualCheckComplete?.invoke(true)
                 }
@@ -357,7 +367,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
             _trendingTracks.value = cached.firstOrNull { it.id == "trending" }?.tracks ?: emptyList()
         }
         loadHome()
-        checkForAppUpdate()
+        checkForAppUpdate(force = true)
         observeSearch()
         viewModelScope.launch {
             _searchFilter.drop(1).collect { filter ->
@@ -715,7 +725,7 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
     fun openSearchItem(item: SearchItem) {
         val song = item.track
         if (song != null) {
-            playTrack(song, _searchResults.value.ifEmpty { listOf(song) }, isPlaylist = true)
+            playTrack(song)
             return
         }
         val browseId = item.browseId ?: item.id
@@ -855,6 +865,9 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
             queueIndex = index
             startTrack(filteredList[index])
         }
+        if (!isPlaylist && queue.value.size <= 1) {
+            ensureRelatedForSingle()
+        }
     }
 
     fun playAll(tracks: List<Track>, shuffle: Boolean = _shuffleEnabled.value, isPlaylist: Boolean = false) {
@@ -891,15 +904,16 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun ensureRelatedForSingle() {
         if (_repeatMode.value == RepeatMode.ONE || isPlaylistMode) return
-        if (queue.value.size > 1) return
+        val currentList = queue.value
+        if (currentList.size > 1 && queueIndex < currentList.lastIndex - 1) return
         val cur = _currentTrack.value ?: return
         viewModelScope.launch(Dispatchers.IO) {
-            val chain = relatedChain(cur)
-            if (chain.isNotEmpty() && queue.value.size <= 1 && !isPlaylistMode && _repeatMode.value != RepeatMode.ONE) {
+            val existingIds = queue.value.map { it.id }.toSet()
+            val chain = relatedChain(cur).filterNot { it.id in existingIds }
+            if (chain.isNotEmpty() && !isPlaylistMode && _repeatMode.value != RepeatMode.ONE) {
                 val toAdd = if (_shuffleEnabled.value) chain.shuffled() else chain
-                val merged = listOf(cur) + toAdd
-                queue.value = merged
-                baseQueue = listOf(cur) + chain
+                queue.value = queue.value + toAdd
+                baseQueue = baseQueue + chain
             }
         }
     }
@@ -1851,6 +1865,9 @@ class RivaViewModel(app: Application) : AndroidViewModel(app) {
         retriedOnlineTracks.remove(track.id)
         _currentTrack.value = track
         _isResolving.value = true
+
+        // Preload YouTube Music radio recommendations when near end of queue
+        ensureRelatedForSingle()
 
         // Defer lyrics prefetch slightly so it doesn't steal network bandwidth during initial player open / stream resolution
         viewModelScope.launch(Dispatchers.IO) {

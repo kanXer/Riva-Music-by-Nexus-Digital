@@ -206,8 +206,8 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
     val similarTracks by viewModel.similarTracks.collectAsStateWithLifecycle()
     val isLoadingSimilar by viewModel.isLoadingSimilar.collectAsStateWithLifecycle()
     val availableUpdate by viewModel.availableUpdate.collectAsStateWithLifecycle()
+    val showUpdatePopup by viewModel.showUpdatePopup.collectAsStateWithLifecycle()
     val isCheckingUpdate by viewModel.isCheckingUpdate.collectAsStateWithLifecycle()
-    var showUpdateDialogExplicitly by rememberSaveable { mutableStateOf(false) }
     var showSimilarSheet by rememberSaveable { mutableStateOf(false) }
     var isFullScreen by rememberSaveable { mutableStateOf(false) }
 
@@ -972,7 +972,7 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
                 }
             },
             onOpenUpdateDialog = {
-                showUpdateDialogExplicitly = true
+                viewModel.openUpdateDialog()
             },
             onSelectThemeMode = viewModel::setThemeMode,
             onToggleDarkMode = viewModel::cycleThemeMode,
@@ -1003,17 +1003,14 @@ fun RivaApp(viewModel: RivaViewModel = viewModel()) {
     }
 
     val update = availableUpdate
-    if (update != null || (showUpdateDialogExplicitly && availableUpdate != null)) {
-        val targetUpdate = update ?: availableUpdate!!
+    if (showUpdatePopup && update != null) {
         UpdateDialog(
-            updateInfo = targetUpdate,
+            updateInfo = update,
             onDismiss = {
                 viewModel.dismissUpdate()
-                showUpdateDialogExplicitly = false
             },
             onUpdateClick = {
                 viewModel.dismissUpdate()
-                showUpdateDialogExplicitly = false
             }
         )
     }
